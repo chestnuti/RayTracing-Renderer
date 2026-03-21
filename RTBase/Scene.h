@@ -42,7 +42,14 @@ public:
 	// Add code here
 	Ray generateRay(float x, float y)
 	{
-		Vec3 dir(0, 0, 1);
+		float xprime = x / width;
+		float yprime = 1.0f - (y / height);
+		xprime = (xprime * 2.0f) - 1.0f;
+		yprime = (yprime * 2.0f) - 1.0;
+		Vec3 dir(xprime, yprime, 1.0f);
+		dir = inverseProjectionMatrix.mulPointAndPerspectiveDivide(dir);
+		dir = camera.mulVec(dir);
+		dir = dir.normalize();
 		return Ray(origin, dir);
 	}
 	bool projectOntoCamera(const Vec3& p, float& x, float& y)

@@ -10,6 +10,11 @@
 #include "GamesEngineeringBase.h"
 #include <thread>
 #include <functional>
+#include <mutex>
+
+struct Tile {
+	unsigned int x, y, w, h;
+};
 
 class RayTracer
 {
@@ -20,6 +25,12 @@ public:
 	MTRandom *samplers;
 	std::thread **threads;
 	int numProcs;
+
+	std::vector<Tile> tiles;	// List of tiles to render
+	std::atomic<int> tileIndex;	// Atomic index to keep track of the next tile to render
+	std::mutex filmMutex;   // protect film->splat()
+	std::mutex canvasMutex; // protect canvas->draw()
+
 	void init(Scene* _scene, GamesEngineeringBase::Window* _canvas)
 	{
 		scene = _scene;
@@ -91,12 +102,13 @@ public:
 				float px = x + 0.5f;
 				float py = y + 0.5f;
 				Ray ray = scene->camera.generateRay(px, py);
-				Colour col = viewNormals(ray);
-				//Colour col = albedo(ray);
+				//Colour col = viewNormals(ray);
+				Colour col = albedo(ray);			
 				film->splat(px, py, col);
 				unsigned char r = (unsigned char)(col.r * 255);
 				unsigned char g = (unsigned char)(col.g * 255);
 				unsigned char b = (unsigned char)(col.b * 255);
+				film->tonemap(x, y, r, g, b);
 				canvas->draw(x, y, r, g, b);
 			}
 		}

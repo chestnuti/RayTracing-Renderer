@@ -5,6 +5,8 @@
 
 #define EPSILON 0.001f
 
+class AABB;
+
 class Ray
 {
 public:
@@ -158,12 +160,25 @@ public:
 	// Add code here
 	bool rayAABB(const Ray& r, float& t)
 	{
-		return true;
+		Vec3 Tmin = (min - r.o) * r.invDir;
+		Vec3 Tmax = (max - r.o) * r.invDir;
+		Vec3 s1 = Min(Tmin, Tmax);
+		Vec3 l1 = Max(Tmin, Tmax);
+		float ts = std::max(s1.x, std::max(s1.y, s1.y));
+		float tl = std::min(l1.x, std::min(l1.y, l1.z));
+		t = std::min(ts, tl);
+		return (ts <= tl) && (tl >= 0.0f);
 	}
 	// Add code here
 	bool rayAABB(const Ray& r)
 	{
-		return true;
+		Vec3 s = (min - r.o) * r.invDir;
+		Vec3 l = (max - r.o) * r.invDir;
+		Vec3 s1 = Min(s, l);
+		Vec3 l1 = Max(s, l);
+		float ts = std::max(s1.x, std::max(s1.y, s.z));
+		float tl = std::min(l1.x, std::min(l1.y, l.z));
+		return (ts <= tl) && (tl >= 0.0f);
 	}
 	// Add code here
 	float area()
@@ -186,7 +201,30 @@ public:
 	// Add code here
 	bool rayIntersect(Ray& r, float& t)
 	{
-		return false;
+		// Ray-sphere intersection
+		Vec3 oc = r.o - centre;
+		float a = Dot(r.dir, r.dir);
+		float b = 2.0f * Dot(oc, r.dir);
+		float c = Dot(oc, oc) - radius * radius;
+		float discriminant = b * b - 4 * a * c;
+		if (discriminant < 0)
+		{
+			return false; // No intersection
+		}
+		float sqrtDiscriminant = sqrtf(discriminant);
+		float t0 = (-b - sqrtDiscriminant) / (2.0f * a);
+		float t1 = (-b + sqrtDiscriminant) / (2.0f * a);
+		if (t0 > EPSILON)
+		{
+			t = t0;
+			return true; // Intersection at t0
+		}
+		if (t1 > EPSILON)
+		{
+			t = t1;
+			return true; // Intersection at t1
+		}
+		return false; // Intersection is behind the ray origin
 	}
 };
 
@@ -210,6 +248,14 @@ public:
 	AABB bounds;
 	BVHNode* r;
 	BVHNode* l;
+
+	int start;
+	int count;
+
+	bool leaf()
+	{
+		return (r == NULL) && (l == NULL);
+	}
 	// This can store an offset and number of triangles in a global triangle list for example
 	// But you can store this however you want!
 	// unsigned int offset;
@@ -222,11 +268,116 @@ public:
 	// Note there are several options for how to implement the build method. Update this as required
 	void build(std::vector<Triangle>& inputTriangles)
 	{
-		// Add BVH building code here
+		buildRecursive(inputTriangles, 0, inputTriangles.size());
+	}
+	// irratetion method for building the BVH
+	BVHNode* buildRecursive(std::vector<Triangle>& tris, int start, int end) {
+		BVHNode* node = new BVHNode();
+
+		// cacluate bounds for this node
+		for (int i = start; i < end; i++) {
+			node->bounds.extend(tris[i].vertices[0].p);
+			node->bounds.extend(tris[i].vertices[1].p);
+			node->bounds.extend(tris[i].vertices[2].p);
+		}
+
+		int count = end - start;
+
+		// leaf node
+		if (count <= 2) {
+			node->start = start;
+			node->count = count;
+			return node;
+		}
+
+		// caculate centroid bounds
+		AABB centroidBounds;
+		centroidBounds.min = centroidBounds.max = tris[start].centre();
+
+		for (int i = start + 1; i < end; i++) {
+			centroidBounds.extend(tris[i].centre());
+		}
+
+		// select axis with largest extent
+		Vec3 extent = {
+			centroidBounds.max.x - centroidBounds.min.x,
+			centroidBounds.max.y - centroidBounds.min.y,
+			centroidBounds.max.z - centroidBounds.min.z
+		};
+
+		int axis = 0;
+		if (extent.y > extent.x) axis = 1;
+		if (extent.z > extent.y && extent.z > extent.x) axis = 2;
+
+		// sort triangles by centroid along selected axis
+		std::sort(tris.begin() + start, tris.begin() + end,
+			[axis](const Triangle& a, const Triangle& b) {
+				return a.centre()[axis] < b.centre()[axis];
+			});
+
+		// segment triangles into two equal sets
+		int mid = (start + end) / 2;
+
+		node->l = buildRecursive(tris, start, mid);
+		node->r = buildRecursive(tris, mid, end);
+
+		return node;
 	}
 	void traverse(const Ray& ray, const std::vector<Triangle>& triangles, IntersectionData& intersection)
 	{
-		// Add BVH Traversal code here
+		// Add code here
+		// use stack-based traversal to avoid recursion
+		std::vector<BVHNode*> stack;
+		stack.push_back(this);
+
+		while (!stack.empty())
+		{
+			BVHNode* node = stack.back();
+			stack.pop_back();
+
+			// check ray-box intersection
+			float t = intersection.t;
+			if (!node->bounds.rayAABB(ray, t))
+			{
+				continue;
+			}
+
+			// if the closest intersection found so far is closer than the intersection with the bounding box, skip
+			if (t >= intersection.t)
+			{
+				continue;
+			}
+
+			// leaf node: check ray-triangle intersections
+			if (node->leaf())
+			{
+				for (int i = node->start; i < node->start + node->count; i++)
+				{
+					float u, v, triT = intersection.t;
+					if (triangles[i].rayIntersect(ray, triT, u, v))
+					{
+						// find the closest intersection
+						if (triT < intersection.t)
+						{
+							intersection.t = triT;
+							intersection.ID = i;
+							intersection.alpha = 1.0f - u - v; // barycentric coord
+							intersection.beta = u;
+							intersection.gamma = v;
+						}
+					}
+				}
+			}
+			else
+			{
+				// internal node: add child nodes to stack for traversal
+				// traverse closer child first
+				if (node->l != NULL)
+					stack.push_back(node->l);
+				if (node->r != NULL)
+					stack.push_back(node->r);
+			}
+		}
 	}
 	IntersectionData traverse(const Ray& ray, const std::vector<Triangle>& triangles)
 	{
@@ -238,6 +389,55 @@ public:
 	bool traverseVisible(const Ray& ray, const std::vector<Triangle>& triangles, const float maxT)
 	{
 		// Add visibility code here
-		return true;
+		// Stack-based BVH traversal for visibility check
+		std::vector<BVHNode*> stack;
+		stack.push_back(this);
+
+		while (!stack.empty())
+		{
+			BVHNode* node = stack.back();
+			stack.pop_back();
+
+			// Check ray-box intersection
+			float t = maxT;
+			if (!node->bounds.rayAABB(ray, t))
+			{
+				continue;
+			}
+
+			// If intersection is beyond maxT, skip this branch
+			if (t >= maxT)
+			{
+				continue;
+			}
+
+			// Leaf node: check ray-triangle intersections
+			if (node->leaf())
+			{
+				for (int i = node->start; i < node->start + node->count; i++)
+				{
+					float u, v, triT = maxT;
+					if (triangles[i].rayIntersect(ray, triT, u, v))
+					{
+						// If intersection is within maxT range, ray is blocked
+						if (triT < maxT)
+						{
+							return true;
+						}
+					}
+				}
+			}
+			else
+			{
+				// Internal node: add child nodes to stack for traversal
+				if (node->l != NULL)
+					stack.push_back(node->l);
+				if (node->r != NULL)
+					stack.push_back(node->r);
+			}
+		}
+
+		// No intersection found within maxT, ray is visible
+		return false;
 	}
 };

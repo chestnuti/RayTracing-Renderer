@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core.h"
+#include <cmath>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -56,7 +57,17 @@ public:
 		texels = new Colour[width * height];
 		for (int i = 0; i < (width * height); i++)
 		{
-			texels[i] = Colour(textureData[i * channels] / 255.0f, textureData[(i * channels) + 1] / 255.0f, textureData[(i * channels) + 2] / 255.0f);
+			// sRGB to linear conversion
+			float r_srgb = textureData[i * channels] / 255.0f;
+			float g_srgb = textureData[(i * channels) + 1] / 255.0f;
+			float b_srgb = textureData[(i * channels) + 2] / 255.0f;
+			
+			// Apply sRGB gamma correction: linear = sRGB^2.2
+			float r_linear = powf(r_srgb, 2.2f);
+			float g_linear = powf(g_srgb, 2.2f);
+			float b_linear = powf(b_srgb, 2.2f);
+			
+			texels[i] = Colour(r_linear, g_linear, b_linear);
 		}
 		if (channels == 4)
 		{
@@ -123,7 +134,7 @@ public:
 		delete[] texels;
 		if (alpha != NULL)
 		{
-			delete alpha;
+			delete[] alpha;
 		}
 	}
 };
@@ -160,13 +171,75 @@ public:
 	unsigned int height;
 	int SPP;
 	ImageFilter* filter;
+	// splat is used to add a sample with colour L at coordinates x, y on the image plane. 
+	// The filter is used to determine how much of the sample contributes to each pixel. 
 	void splat(const float x, const float y, const Colour& L)
 	{
 		// Code to splat a smaple with colour L into the image plane using an ImageFilter
+		float filterWeights[25]; // Storage to cache weights
+		unsigned int indices[25]; // Store indices to minimize computations
+		unsigned int used = 0;
+		float total = 0;
+		int size = filter->size();
+		for (int i = -size; i <= size; i++) {
+			for (int j = -size; j <= size; j++) {
+				int px = (int)x + j;
+				int py = (int)y + i;
+				if (px >= 0 && px < width && py >= 0 && py < height) {
+					indices[used] = (py * width) + px;
+					filterWeights[used] = filter->filter(px - x, py - y);
+					total += filterWeights[used];
+					used++;
+				}
+			}
+		}
+		if (total == 0) {
+			film[(int)y * width + (int)x] = film[(int)y * width + (int)x] + L;
+			return; // Avoid division by zero
+		}
+		for (int i = 0; i < used; i++) {
+			film[indices[i]] = film[indices[i]] + (L * filterWeights[i] / total);
+		}
 	}
-	void tonemap(int x, int y, unsigned char& r, unsigned char& g, unsigned char& b, float exposure = 1.0f)
+	void tonemap(unsigned int x, unsigned int y, unsigned char& r, unsigned char& g, unsigned char& b, float exposure = 1.0f)
 	{
-		// Return a tonemapped pixel at coordinates x, y
+		// Defensive: if no samples yet, output black.
+		if (SPP <= 0)
+		{
+			r = g = b = 0;
+			return;
+		}
+
+		Colour col = film[y * width + x] / (float)SPP;
+
+		// Defensive: handle NaN/Inf in the film buffer (can happen after memory corruption).
+		if (!std::isfinite(col.r) || !std::isfinite(col.g) || !std::isfinite(col.b))
+		{
+			r = g = b = 0;
+			return;
+		}
+
+		col = col * exposure;
+
+		// Reinhard tone mapping per-channel
+		col.r = col.r / (1.0f + col.r);
+		col.g = col.g / (1.0f + col.g);
+		col.b = col.b / (1.0f + col.b);
+
+		// Linear -> sRGB gamma
+		constexpr float invGamma = 1.0f / 2.2f;
+		col.r = powf(std::max(0.0f, col.r), invGamma);
+		col.g = powf(std::max(0.0f, col.g), invGamma);
+		col.b = powf(std::max(0.0f, col.b), invGamma);
+
+		// Clamp to [0,1]
+		col.r = fminf(fmaxf(col.r, 0.0f), 1.0f);
+		col.g = fminf(fmaxf(col.g, 0.0f), 1.0f);
+		col.b = fminf(fmaxf(col.b, 0.0f), 1.0f);
+
+		r = (unsigned char)(col.r * 255.0f);
+		g = (unsigned char)(col.g * 255.0f);
+		b = (unsigned char)(col.b * 255.0f);
 	}
 	// Do not change any code below this line
 	void init(int _width, int _height, ImageFilter* _filter)
