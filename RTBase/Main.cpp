@@ -1,4 +1,4 @@
-
+// Using Z-up coordinate system, left-handed
 
 #include "GEMLoader.h"
 #include "Renderer.h"

@@ -95,23 +95,80 @@ public:
 	void render()
 	{
 		film->incrementSPP();
-		for (unsigned int y = 0; y < film->height; y++)
+
+		// Tile-based rendering loop
+		unsigned int tileX = film->width / numProcs;
+		unsigned int tileY = film->height / numProcs;
+		tiles.clear();
+		for (unsigned int y = 0; y < film->height; y += tileY)
 		{
-			for (unsigned int x = 0; x < film->width; x++)
+			for (unsigned int x = 0; x < film->width; x += tileX)
 			{
-				float px = x + 0.5f;
-				float py = y + 0.5f;
-				Ray ray = scene->camera.generateRay(px, py);
-				//Colour col = viewNormals(ray);
-				Colour col = albedo(ray);			
-				film->splat(px, py, col);
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-				canvas->draw(x, y, r, g, b);
+				Tile tile;
+				tile.x = x;
+				tile.y = y;
+				tile.w = std::min(tileX, film->width - x);
+				tile.h = std::min(tileY, film->height - y);
+				tiles.push_back(tile);
 			}
 		}
+
+		// Lambda function for rendering a tile
+		auto renderTile = [&](int threadId) {
+			while (true) {
+				int index = tileIndex.fetch_add(1);
+				if (index >= tiles.size()) {
+					break; // No more tiles to render
+				}
+				Tile tile = tiles[index];
+				for (unsigned int y = tile.y; y < tile.y + tile.h; y++)
+				{
+					for (unsigned int x = tile.x; x < tile.x + tile.w; x++)
+					{
+						float px = x + 0.5f;
+						float py = y + 0.5f;
+						Ray ray = scene->camera.generateRay(px, py);
+						Colour col = albedo(ray);
+						film->splat(px, py, col);
+						unsigned char r = (unsigned char)(col.r * 255);
+						unsigned char g = (unsigned char)(col.g * 255);
+						unsigned char b = (unsigned char)(col.b * 255);
+						film->tonemap(x, y, r, g, b);
+						canvas->draw(x, y, r, g, b);
+					}
+				}
+			}
+		};
+
+		// Create threads to render tiles
+		tileIndex = 0; // Initialize atomic tile index
+		for (int i = 0; i < numProcs; i++) {
+			threads[i] = new std::thread(renderTile, i);
+		}
+
+		// Wait for all threads to finish
+		for (int i = 0; i < numProcs; i++) {
+			threads[i]->join();
+			delete threads[i];
+		}
+
+		//for (unsigned int y = 0; y < film->height; y++)
+		//{
+		//	for (unsigned int x = 0; x < film->width; x++)
+		//	{
+		//		float px = x + 0.5f;
+		//		float py = y + 0.5f;
+		//		Ray ray = scene->camera.generateRay(px, py);
+		//		//Colour col = viewNormals(ray);
+		//		Colour col = albedo(ray);			
+		//		film->splat(px, py, col);
+		//		unsigned char r = (unsigned char)(col.r * 255);
+		//		unsigned char g = (unsigned char)(col.g * 255);
+		//		unsigned char b = (unsigned char)(col.b * 255);
+		//		film->tonemap(x, y, r, g, b);
+		//		canvas->draw(x, y, r, g, b);
+		//	}
+		//}
 	}
 	int getSPP()
 	{
