@@ -56,17 +56,90 @@ public:
 			return Colour(0.0f, 0.0f, 0.0f);
 		}
 		// Compute direct lighting here
-		return Colour(0.0f, 0.0f, 0.0f);
+		float pmf;
+		Light* light = scene->sampleLight(sampler, pmf);
+		if (!light) return Colour(0, 0, 0);
+
+		float lightPdf;
+		Colour emission;
+		Vec3 lightSamplePoint = light->sample(shadingData, sampler, emission, lightPdf);
+
+		// Distinguish area light from directional/environment light based on whether the sampled point is on the surface of the light
+		if (light->isArea()) {
+			Vec3 wi = (lightSamplePoint - shadingData.x).normalize();
+			float dist = (lightSamplePoint - shadingData.x).length();
+			// Geometric term
+			float cosAtSurface = std::max(0.0f, Dot(shadingData.sNormal, wi));
+			float cosAtLight = std::max(0.0f, Dot(light->normal(shadingData, wi), -wi));
+			float G = cosAtSurface * cosAtLight / (dist * dist);
+			// Visibility
+			if (!scene->visible(shadingData.x, lightSamplePoint))
+				return Colour(0, 0, 0);
+			Colour bsdf = shadingData.bsdf->evaluate(shadingData, wi);
+			return bsdf * emission * G / (lightPdf * pmf);
+		}
+		else {
+			// Directional/Environment light: wi is directly the direction from the light to the surface
+			Vec3 wi = lightSamplePoint;
+			float cosTheta = std::max(0.0f, Dot(shadingData.sNormal, wi));
+			// Visible if no intersection with scene geometry
+			Ray shadowRay; shadowRay.init(shadingData.x + wi * EPSILON, wi);
+			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX) == false)
+				return Colour(0, 0, 0);
+			Colour bsdf = shadingData.bsdf->evaluate(shadingData, wi);
+			return bsdf * emission * cosTheta / (lightPdf * pmf);
+		}
 	}
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler)
 	{
 		// Add pathtracer code here
-		return Colour(0.0f, 0.0f, 0.0f);
+		IntersectionData intersection = scene->traverse(r);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+		if (shadingData.t >= FLT_MAX)
+			return pathThroughput * scene->background->evaluate(r.dir);
+
+		// to light source directly
+		if (shadingData.bsdf->isLight())
+			return pathThroughput * shadingData.bsdf->emit(shadingData, shadingData.wo);
+
+		Colour L(0, 0, 0);
+
+		// NEE direct lighting
+		L = L + pathThroughput * computeDirect(shadingData, sampler);
+
+		// Russian roulette termination
+		float q = std::min(pathThroughput.Lum(), 1.0f);
+		if (sampler->next() > q) return L;
+		pathThroughput = pathThroughput / q;
+
+		// sample BSDF
+		float pdf;
+		Colour bsdfVal;
+		Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, pdf);
+		float cosTheta = std::abs(Dot(shadingData.sNormal, wi));
+		pathThroughput = pathThroughput * bsdfVal * cosTheta / pdf;
+
+		// irradiance along the sampled direction
+		Ray nextRay; nextRay.init(shadingData.x + wi * EPSILON, wi);
+		return L + pathTrace(nextRay, pathThroughput, depth + 1, sampler);
 	}
 	Colour direct(Ray& r, Sampler* sampler)
 	{
 		// Compute direct lighting for an image sampler here
-		return Colour(0.0f, 0.0f, 0.0f);
+		IntersectionData intersection = scene->traverse(r);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+		// Miss -> background
+		if (shadingData.t < FLT_MAX)
+		{
+			if (shadingData.bsdf->isLight())
+			{
+				return shadingData.bsdf->emit(shadingData, shadingData.wo);
+			}
+			return computeDirect(shadingData, sampler);
+		}
+		return scene->background->evaluate(r.dir);
 	}
 	Colour albedo(Ray& r)
 	{
@@ -128,7 +201,8 @@ public:
 						float px = x + 0.5f;
 						float py = y + 0.5f;
 						Ray ray = scene->camera.generateRay(px, py);
-						Colour col = albedo(ray);
+						Colour startingThroughput(1, 1, 1);
+						Colour col = pathTrace(ray, startingThroughput, 0, &samplers[threadId]);
 						film->splat(px, py, col);
 						unsigned char r = (unsigned char)(col.r * 255);
 						unsigned char g = (unsigned char)(col.g * 255);

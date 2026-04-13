@@ -82,7 +82,7 @@ public:
 	void build()
 	{
 		// Add BVH building code here
-		
+		bvh = (new BVHNode())->buildRecursive(triangles, 0, (int)triangles.size());
 		// Do not touch the code below this line!
 		// Build light list
 		for (int i = 0; i < triangles.size(); i++)
@@ -121,7 +121,11 @@ public:
 	}
 	Light* sampleLight(Sampler* sampler, float& pmf)
 	{
-		return NULL;
+		int n = (int)lights.size();
+		int idx = (int)(sampler->next() * n);
+		idx = std::min(idx, n - 1);
+		pmf = 1.0f / (float)n;
+		return lights[idx];
 	}
 	// Do not modify any code below this line
 	void init(std::vector<Triangle> meshTriangles, std::vector<BSDF*> meshMaterials, Light* _background)

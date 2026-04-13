@@ -130,7 +130,13 @@ public:
 	// Add code here
 	Vec3 sample(Sampler* sampler, float& pdf)
 	{
-		return Vec3(0, 0, 0);
+		float r1 = sqrtf(sampler->next());
+		float r2 = sampler->next();
+		float alpha = 1.0f - r1;
+		float beta = r1 * (1.0f - r2);
+		float gamma = r1 * r2;
+		pdf = 1.0f / area;
+		return vertices[0].p * alpha + vertices[1].p * beta + vertices[2].p * gamma;
 	}
 	Vec3 gNormal()
 	{
