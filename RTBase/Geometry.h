@@ -428,7 +428,7 @@ public:
 						// If intersection is within maxT range, ray is blocked
 						if (triT < maxT)
 						{
-							return true;
+							return false;
 						}
 					}
 				}
@@ -444,6 +444,6 @@ public:
 		}
 
 		// No intersection found within maxT, ray is visible
-		return false;
+		return true;
 	}
 };

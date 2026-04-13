@@ -93,6 +93,7 @@ public:
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler)
 	{
 		// Add pathtracer code here
+		// - Compute ray-scene intersection
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 
