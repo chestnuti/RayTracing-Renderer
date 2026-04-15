@@ -93,6 +93,9 @@ public:
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler)
 	{
 		// Add pathtracer code here
+		// Limit the maximum depth of path tracing
+		constexpr int kMaxDepth = 16;
+		if (depth >= kMaxDepth) return Colour(0, 0, 0);
 		// - Compute ray-scene intersection
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
@@ -102,7 +105,13 @@ public:
 
 		// to light source directly
 		if (shadingData.bsdf->isLight())
-			return pathThroughput * shadingData.bsdf->emit(shadingData, shadingData.wo);
+		{
+			// Only count emission for primary ray
+			if (depth == 0)
+				return pathThroughput * shadingData.bsdf->emit(shadingData, shadingData.wo);
+			else
+				return Colour(0, 0, 0);
+		}
 
 		Colour L(0, 0, 0);
 
