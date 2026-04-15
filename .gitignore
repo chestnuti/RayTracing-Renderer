@@ -361,3 +361,10 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Codex temporary/cache files
+.codex_tmp_pdf/
+.codex_tmp_*/
+
+# Local dotnet CLI home/cache
+.dotnet_home/

@@ -97,7 +97,7 @@ public:
 	}
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
-		// Add correct sampling code here
+		//* Add correct sampling code here
 		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
 		pdf = SamplingDistributions::cosineHemispherePDF(wi);
 
@@ -111,7 +111,7 @@ public:
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
-		// Add correct PDF code here
+		//* Add correct PDF code here
 		return 1.0f;
 	}
 	bool isPureSpecular()
@@ -139,23 +139,29 @@ public:
 	}
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
-		// Replace this with Mirror sampling code
-		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
-		pdf = wi.z / M_PI;
-		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
-		wi = shadingData.frame.toWorld(wi);
-		return wi;
+		//* Replace this with Mirror sampling code
+		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
+		if (woLocal.z <= 0.0f)
+		{
+			pdf = 0.0f;
+			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
+			return Vec3(0.0f, 0.0f, 0.0f);
+		}
+		Vec3 wiLocal(-woLocal.x, -woLocal.y, woLocal.z);
+		pdf = 1.0f;
+		float cosTheta = std::max(std::abs(wiLocal.z), EPSILON);
+		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / cosTheta;
+		return shadingData.frame.toWorld(wiLocal);
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
-		// Replace this with Mirror evaluation code
-		return albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
+		//* Replace this with Mirror evaluation code
+		return Colour(0.0f, 0.0f, 0.0f);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
-		// Replace this with Mirror PDF
-		Vec3 wiLocal = shadingData.frame.toLocal(wi);
-		return SamplingDistributions::cosineHemispherePDF(wiLocal);
+		//* Replace this with Mirror PDF
+		return 0.0f;
 	}
 	bool isPureSpecular()
 	{

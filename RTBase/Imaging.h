@@ -175,7 +175,7 @@ public:
 	// The filter is used to determine how much of the sample contributes to each pixel. 
 	void splat(const float x, const float y, const Colour& L)
 	{
-		// Add code here
+		//* Add code here
 		// Code to splat a smaple with colour L into the image plane using an ImageFilter
 		float filterWeights[25]; // Storage to cache weights
 		unsigned int indices[25]; // Store indices to minimize computations
@@ -204,7 +204,7 @@ public:
 	}
 	void tonemap(unsigned int x, unsigned int y, unsigned char& r, unsigned char& g, unsigned char& b, float exposure = 1.0f)
 	{
-		// Add code here
+		//* Add code here
 		// Defensive: if no samples yet, output black.
 		if (SPP <= 0)
 		{

@@ -39,7 +39,7 @@ public:
 		viewDirection = camera.mulVec(viewDirection);
 		viewDirection = viewDirection.normalize();
 	}
-	// Add code here
+	//* Add code here
 	Ray generateRay(float x, float y)
 	{
 		float xprime = x / width;
@@ -81,7 +81,7 @@ public:
 	AABB bounds;
 	void build()
 	{
-		// Add BVH building code here
+		//* Add BVH building code here
 		bvh = (new BVHNode())->buildRecursive(triangles, 0, (int)triangles.size());
 		// Do not touch the code below this line!
 		// Build light list
@@ -111,9 +111,9 @@ public:
 				{
 					intersection.t = t;
 					intersection.ID = i;
-					intersection.alpha = u;
-					intersection.beta = v;
-					intersection.gamma = 1.0f - (u + v);
+					intersection.alpha = 1.0f - (u + v);
+					intersection.beta = u;
+					intersection.gamma = v;
 				}
 			}
 		}

@@ -42,7 +42,7 @@ public:
 		n = _n;
 		d = _d;
 	}
-	// Add code here
+	//* Add code here
 	bool rayIntersect(Ray& r, float& t)
 	{
 		float tempT;
@@ -89,7 +89,7 @@ public:
 	{
 		return (vertices[0].p + vertices[1].p + vertices[2].p) / 3.0f;
 	}
-	// Add code here
+	//* Add code here
 	bool rayIntersect(const Ray& r, float& t, float& u, float& v) const
 	{
 		// Moller-Trumbore ray-triangle intersection algorithm
@@ -127,7 +127,7 @@ public:
 		interpolatedU = vertices[0].u * alpha + vertices[1].u * beta + vertices[2].u * gamma;
 		interpolatedV = vertices[0].v * alpha + vertices[1].v * beta + vertices[2].v * gamma;
 	}
-	// Add code here
+	//* Add code here
 	Vec3 sample(Sampler* sampler, float& pdf)
 	{
 		float r1 = sqrtf(sampler->next());
@@ -163,7 +163,7 @@ public:
 		max = Max(max, p);
 		min = Min(min, p);
 	}
-	// Add code here
+	//* Add code here
 	bool rayAABB(const Ray& r, float& t)
 	{
 		Vec3 Tmin = (min - r.o) * r.invDir;
@@ -175,7 +175,7 @@ public:
 		t = std::min(ts, tl);
 		return (ts <= tl) && (tl >= 0.0f);
 	}
-	// Add code here
+	//* Add code here
 	bool rayAABB(const Ray& r)
 	{
 		Vec3 s = (min - r.o) * r.invDir;
@@ -186,7 +186,7 @@ public:
 		float tl = std::min(l1.x, std::min(l1.y, l.z));
 		return (ts <= tl) && (tl >= 0.0f);
 	}
-	// Add code here
+	//* Add code here
 	float area()
 	{
 		Vec3 size = max - min;
@@ -204,7 +204,7 @@ public:
 		centre = _centre;
 		radius = _radius;
 	}
-	// Add code here
+	//* Add code here
 	bool rayIntersect(Ray& r, float& t)
 	{
 		// Ray-sphere intersection
@@ -331,7 +331,7 @@ public:
 	}
 	void traverse(const Ray& ray, const std::vector<Triangle>& triangles, IntersectionData& intersection)
 	{
-		// Add code here
+		//* Add code here
 		// use stack-based traversal to avoid recursion
 		std::vector<BVHNode*> stack;
 		stack.push_back(this);
@@ -394,7 +394,7 @@ public:
 	}
 	bool traverseVisible(const Ray& ray, const std::vector<Triangle>& triangles, const float maxT)
 	{
-		// Add visibility code here
+		//* Add visibility code here
 		// Stack-based BVH traversal for visibility check
 		std::vector<BVHNode*> stack;
 		stack.push_back(this);

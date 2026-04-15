@@ -92,7 +92,7 @@ public:
 	}
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler)
 	{
-		// Add pathtracer code here
+		//* Add pathtracer code here
 		// Limit the maximum depth of path tracing
 		constexpr int kMaxDepth = 16;
 		if (depth >= kMaxDepth) return Colour(0, 0, 0);
