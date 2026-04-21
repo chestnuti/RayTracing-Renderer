@@ -93,10 +93,10 @@ public:
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler)
 	{
 		//* Add pathtracer code here
-		// Limit the maximum depth of path tracing
-		constexpr int kMaxDepth = 16;
+		// Limit the maximum depth
+		constexpr int kMaxDepth = 8;
 		if (depth >= kMaxDepth) return Colour(0, 0, 0);
-		// - Compute ray-scene intersection
+		// Compute ray-scene intersection
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 
