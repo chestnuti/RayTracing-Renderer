@@ -64,7 +64,7 @@ public:
 		Colour emission;
 		Vec3 lightSamplePoint = light->sample(shadingData, sampler, emission, lightPdf);
 
-		// Distinguish area light from directional/environment light based on whether the sampled point is on the surface of the light
+		// Distinguish area light
 		if (light->isArea()) {
 			Vec3 wi = (lightSamplePoint - shadingData.x).normalize();
 			float dist = (lightSamplePoint - shadingData.x).length();
@@ -79,10 +79,10 @@ public:
 			return bsdf * emission * G / (lightPdf * pmf);
 		}
 		else {
-			// Directional/Environment light: wi is directly the direction from the light to the surface
+			// Directional/Environment light
 			Vec3 wi = lightSamplePoint;
 			float cosTheta = std::max(0.0f, Dot(shadingData.sNormal, wi));
-			// Visible if no intersection with scene geometry
+			// Visible if no intersection
 			Ray shadowRay; shadowRay.init(shadingData.x + wi * EPSILON, wi);
 			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX) == false)
 				return Colour(0, 0, 0);
