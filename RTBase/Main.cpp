@@ -38,6 +38,7 @@ int main(int argc, char *argv[])
 	std::string sceneName = "MaterialsScene";
 	std::string filename = "GI.hdr";
 	unsigned int SPP = 8192;
+	bool enableDenoise = false;
 
 	if (argc > 1)
 	{
@@ -74,6 +75,10 @@ int main(int argc, char *argv[])
 			if (pair.first == "-SPP")
 			{
 				SPP = stoi(pair.second);
+			}
+			if (pair.first == "-denoise")
+			{
+				enableDenoise = stoi(pair.second) != 0;
 			}
 		}
 	}
@@ -141,6 +146,11 @@ int main(int argc, char *argv[])
 		}
 		if (SPP == rt.getSPP())
 		{
+			rt.finalizeAOVs();
+			if (enableDenoise)
+			{
+				rt.denoiseOIDN();
+			}
 			rt.saveHDR(filename);
 			break;
 		}

@@ -2,6 +2,8 @@
 
 #include "Core.h"
 #include <cmath>
+#include <string>
+#include <vector>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -163,6 +165,13 @@ public:
 	}
 };
 
+struct PrimaryAOV
+{
+	bool hit = false;
+	Colour albedo;
+	Colour normal;
+};
+
 class Film
 {
 public:
@@ -171,6 +180,16 @@ public:
 	unsigned int height;
 	int SPP;
 	ImageFilter* filter;
+	std::vector<Colour> aovAlbedo;
+	std::vector<Colour> aovNormal;
+	std::vector<Colour> denoisedBeauty;
+	bool hasDenoisedBeauty = false;
+
+	unsigned int pixelIndex(unsigned int x, unsigned int y) const
+	{
+		return y * width + x;
+	}
+
 	// splat is used to add a sample with colour L at coordinates x, y on the image plane. 
 	// The filter is used to determine how much of the sample contributes to each pixel. 
 	void splat(const float x, const float y, const Colour& L)
@@ -201,6 +220,62 @@ public:
 		for (int i = 0; i < used; i++) {
 			film[indices[i]] = film[indices[i]] + (L * filterWeights[i] / total);
 		}
+	}
+	void splatAOV(unsigned int x, unsigned int y, const PrimaryAOV& aov)
+	{
+		const unsigned int idx = pixelIndex(x, y);
+		if (idx >= (width * height))
+		{
+			return;
+		}
+
+		if (!aov.hit)
+		{
+			return;
+		}
+
+		aovAlbedo[idx] = aovAlbedo[idx] + aov.albedo;
+		aovNormal[idx] = aovNormal[idx] + aov.normal;
+	}
+	void clearAOVs()
+	{
+		const unsigned int count = width * height;
+		aovAlbedo.assign(count, Colour(0, 0, 0));
+		aovNormal.assign(count, Colour(0, 0, 0));
+	}
+	void finalizeAOVs()
+	{
+		if (SPP <= 0)
+		{
+			return;
+		}
+		const float invSPP = 1.0f / (float)SPP;
+		const unsigned int count = width * height;
+		for (unsigned int i = 0; i < count; ++i)
+		{
+			aovAlbedo[i] = aovAlbedo[i] * invSPP;
+			aovNormal[i] = aovNormal[i] * invSPP;
+			const float nLenSq = aovNormal[i].r * aovNormal[i].r + aovNormal[i].g * aovNormal[i].g + aovNormal[i].b * aovNormal[i].b;
+			if (nLenSq > 1e-12f)
+			{
+				const float invLen = 1.0f / sqrtf(nLenSq);
+				aovNormal[i] = aovNormal[i] * invLen;
+			}
+		}
+	}
+	std::vector<Colour> getAveragedBeauty() const
+	{
+		std::vector<Colour> avg(width * height, Colour(0, 0, 0));
+		if (SPP <= 0)
+		{
+			return avg;
+		}
+		const float invSPP = 1.0f / (float)SPP;
+		for (unsigned int i = 0; i < width * height; ++i)
+		{
+			avg[i] = film[i] * invSPP;
+		}
+		return avg;
 	}
 	void tonemap(unsigned int x, unsigned int y, unsigned char& r, unsigned char& g, unsigned char& b, float exposure = 1.0f)
 	{
@@ -249,12 +324,16 @@ public:
 		width = _width;
 		height = _height;
 		film = new Colour[width * height];
+		clearAOVs();
 		clear();
 		filter = _filter;
 	}
 	void clear()
 	{
 		memset(film, 0, width * height * sizeof(Colour));
+		clearAOVs();
+		hasDenoisedBeauty = false;
+		denoisedBeauty.clear();
 		SPP = 0;
 	}
 	void incrementSPP()
@@ -263,10 +342,16 @@ public:
 	}
 	void save(std::string filename)
 	{
+		if (hasDenoisedBeauty && denoisedBeauty.size() == (width * height))
+		{
+			stbi_write_hdr(filename.c_str(), width, height, 3, (float*)denoisedBeauty.data());
+			return;
+		}
 		Colour* hdrpixels = new Colour[width * height];
+		const float invSPP = SPP > 0 ? 1.0f / (float)SPP : 0.0f;
 		for (unsigned int i = 0; i < (width * height); i++)
 		{
-			hdrpixels[i] = film[i] / (float)SPP;
+			hdrpixels[i] = film[i] * invSPP;
 		}
 		stbi_write_hdr(filename.c_str(), width, height, 3, (float*)hdrpixels);
 		delete[] hdrpixels;

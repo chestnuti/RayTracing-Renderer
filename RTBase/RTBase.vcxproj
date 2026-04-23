@@ -70,7 +70,20 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Label="UserMacros">
+    <UseOIDN>true</UseOIDN>
+    <OIDN_ROOT>$(SolutionDir)oidn-master</OIDN_ROOT>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(UseOIDN)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>USE_OIDN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(OIDN_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(OIDN_ROOT)\lib;$(OIDN_ROOT)\build\lib;$(OIDN_ROOT)\build\lib\$(Configuration);$(OIDN_ROOT)\build\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>OpenImageDenoise.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>

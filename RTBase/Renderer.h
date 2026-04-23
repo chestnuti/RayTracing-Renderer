@@ -11,6 +11,12 @@
 #include <thread>
 #include <functional>
 #include <mutex>
+#include <string>
+#include <vector>
+#include <iostream>
+#ifdef USE_OIDN
+#include "OpenImageDenoise/oidn.hpp"
+#endif
 
 struct Tile {
 	unsigned int x, y, w, h;
@@ -175,13 +181,81 @@ public:
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
+	PrimaryAOV computePrimaryAOV(const Ray& r)
+	{
+		PrimaryAOV aov;
+		IntersectionData intersection = scene->traverse(r);
+		if (intersection.t >= FLT_MAX)
+		{
+			return aov;
+		}
+
+		Ray ray = r;
+		ShadingData shadingData = scene->calculateShadingData(intersection, ray);
+		aov.hit = true;
+		aov.albedo = albedo(ray);
+		aov.normal = Colour(shadingData.sNormal.x, shadingData.sNormal.y, shadingData.sNormal.z);
+		return aov;
+	}
+	void finalizeAOVs()
+	{
+		film->finalizeAOVs();
+	}
+#ifdef USE_OIDN
+	bool denoiseOIDN()
+	{
+		const unsigned int pixelCount = film->width * film->height;
+		if (pixelCount == 0)
+		{
+			return false;
+		}
+
+		std::vector<Colour> beauty = film->getAveragedBeauty();
+		std::vector<Colour> out(pixelCount, Colour(0, 0, 0));
+
+		oidn::DeviceRef device = oidn::newDevice();
+		device.commit();
+		oidn::FilterRef filter = device.newFilter("RT");
+
+		filter.setImage("color", beauty.data(), oidn::Format::Float3, film->width, film->height);
+		filter.setImage("output", out.data(), oidn::Format::Float3, film->width, film->height);
+		if (film->aovAlbedo.size() == pixelCount)
+		{
+			filter.setImage("albedo", film->aovAlbedo.data(), oidn::Format::Float3, film->width, film->height);
+		}
+		if (film->aovNormal.size() == pixelCount)
+		{
+			filter.setImage("normal", film->aovNormal.data(), oidn::Format::Float3, film->width, film->height);
+		}
+		filter.set("hdr", true);
+		filter.commit();
+		filter.execute();
+
+		const char* errorMessage;
+		if (device.getError(errorMessage) != oidn::Error::None)
+		{
+			std::cerr << "OIDN error: " << errorMessage << std::endl;
+			return false;
+		}
+
+		film->denoisedBeauty = std::move(out);
+		film->hasDenoisedBeauty = true;
+		return true;
+	}
+#else
+	bool denoiseOIDN()
+	{
+		std::cerr << "OIDN disabled. Rebuild with USE_OIDN and linked OpenImageDenoise." << std::endl;
+		return false;
+	}
+#endif
 	void render()
 	{
 		film->incrementSPP();
 
 		// Tile-based rendering loop
-		unsigned int tileX = film->width / numProcs;
-		unsigned int tileY = film->height / numProcs;
+		unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
+		unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
 		tiles.clear();
 		for (unsigned int y = 0; y < film->height; y += tileY)
 		{
@@ -214,6 +288,8 @@ public:
 						Colour startingThroughput(1, 1, 1);
 						Colour col = pathTrace(ray, startingThroughput, 0, &samplers[threadId]);
 						film->splat(px, py, col);
+						//PrimaryAOV aov = computePrimaryAOV(ray);
+						//film->splatAOV(x, y, aov);
 						unsigned char r = (unsigned char)(col.r * 255);
 						unsigned char g = (unsigned char)(col.g * 255);
 						unsigned char b = (unsigned char)(col.b * 255);
