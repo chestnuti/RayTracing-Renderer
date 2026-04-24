@@ -288,8 +288,8 @@ public:
 						Colour startingThroughput(1, 1, 1);
 						Colour col = pathTrace(ray, startingThroughput, 0, &samplers[threadId]);
 						film->splat(px, py, col);
-						//PrimaryAOV aov = computePrimaryAOV(ray);
-						//film->splatAOV(x, y, aov);
+						PrimaryAOV aov = computePrimaryAOV(ray);
+						film->splatAOV(x, y, aov);
 						unsigned char r = (unsigned char)(col.r * 255);
 						unsigned char g = (unsigned char)(col.g * 255);
 						unsigned char b = (unsigned char)(col.b * 255);

@@ -170,7 +170,7 @@ public:
 		Vec3 Tmax = (max - r.o) * r.invDir;
 		Vec3 s1 = Min(Tmin, Tmax);
 		Vec3 l1 = Max(Tmin, Tmax);
-		float ts = std::max(s1.x, std::max(s1.y, s1.y));
+		float ts = std::max(s1.x, std::max(s1.y, s1.z));
 		float tl = std::min(l1.x, std::min(l1.y, l1.z));
 		t = std::min(ts, tl);
 		return (ts <= tl) && (tl >= 0.0f);
@@ -182,8 +182,8 @@ public:
 		Vec3 l = (max - r.o) * r.invDir;
 		Vec3 s1 = Min(s, l);
 		Vec3 l1 = Max(s, l);
-		float ts = std::max(s1.x, std::max(s1.y, s.z));
-		float tl = std::min(l1.x, std::min(l1.y, l.z));
+		float ts = std::max(s1.x, std::max(s1.y, s1.z));
+		float tl = std::min(l1.x, std::min(l1.y, l1.z));
 		return (ts <= tl) && (tl >= 0.0f);
 	}
 	//* Add code here

@@ -82,7 +82,8 @@ public:
 	void build()
 	{
 		//* Add BVH building code here
-		bvh = (new BVHNode())->buildRecursive(triangles, 0, (int)triangles.size());
+		BVHNode builder;
+		bvh = builder.buildRecursive(triangles, 0, (int)triangles.size());
 		// Do not touch the code below this line!
 		// Build light list
 		for (int i = 0; i < triangles.size(); i++)
@@ -98,6 +99,11 @@ public:
 	}
 	IntersectionData traverse(const Ray& ray)
 	{
+		if (bvh != NULL)
+		{
+			return bvh->traverse(ray, triangles);
+		}
+
 		IntersectionData intersection;
 		intersection.t = FLT_MAX;
 		for (int i = 0; i < triangles.size(); i++)
