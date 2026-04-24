@@ -217,15 +217,28 @@ public:
 		device.commit();
 		oidn::FilterRef filter = device.newFilter("RT");
 
-		filter.setImage("color", beauty.data(), oidn::Format::Float3, film->width, film->height);
-		filter.setImage("output", out.data(), oidn::Format::Float3, film->width, film->height);
+		const size_t imageBytes = static_cast<size_t>(pixelCount) * sizeof(Colour);
+		oidn::BufferRef colorBuf = device.newBuffer(imageBytes);
+		oidn::BufferRef outputBuf = device.newBuffer(imageBytes);
+		std::memcpy(colorBuf.getData(), beauty.data(), imageBytes);
+
+		filter.setImage("color", colorBuf, oidn::Format::Float3, film->width, film->height);
+		filter.setImage("output", outputBuf, oidn::Format::Float3, film->width, film->height);
+
+		oidn::BufferRef albedoBuf;
 		if (film->aovAlbedo.size() == pixelCount)
 		{
-			filter.setImage("albedo", film->aovAlbedo.data(), oidn::Format::Float3, film->width, film->height);
+			albedoBuf = device.newBuffer(imageBytes);
+			std::memcpy(albedoBuf.getData(), film->aovAlbedo.data(), imageBytes);
+			filter.setImage("albedo", albedoBuf, oidn::Format::Float3, film->width, film->height);
 		}
+
+		oidn::BufferRef normalBuf;
 		if (film->aovNormal.size() == pixelCount)
 		{
-			filter.setImage("normal", film->aovNormal.data(), oidn::Format::Float3, film->width, film->height);
+			normalBuf = device.newBuffer(imageBytes);
+			std::memcpy(normalBuf.getData(), film->aovNormal.data(), imageBytes);
+			filter.setImage("normal", normalBuf, oidn::Format::Float3, film->width, film->height);
 		}
 		filter.set("hdr", true);
 		filter.commit();
@@ -237,6 +250,8 @@ public:
 			std::cerr << "OIDN error: " << errorMessage << std::endl;
 			return false;
 		}
+
+		std::memcpy(out.data(), outputBuf.getData(), imageBytes);
 
 		film->denoisedBeauty = std::move(out);
 		film->hasDenoisedBeauty = true;
