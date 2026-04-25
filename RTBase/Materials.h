@@ -37,11 +37,13 @@ public:
 	static float fresnelDielectric(float cosTheta, float iorInt, float iorExt)
 	{
 		//* Add code here
+		// F = (Rs^2 + Rp^2) / 2
 		cosTheta = fabsf(cosTheta);
 		cosTheta = std::min(cosTheta, 1.0f);
 
-		// Calculate sinTheta using trigonometric identity
+		// Sin(theta) of angle of incidence
 		float sinTheta = sqrtf(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+
 		float sinThetaT = (iorExt / iorInt) * sinTheta;
 
 		// Total internal reflection
@@ -49,10 +51,11 @@ public:
 
 		float cosThetaT = sqrtf(std::max(0.0f, 1.0f - sinThetaT * sinThetaT));
 
-		// Calculate Rs and Rp
+		// Fresnel reflectance
 		float Rs = (iorExt * cosTheta - iorInt * cosThetaT) / (iorExt * cosTheta + iorInt * cosThetaT);
 		float Rp = (iorInt * cosTheta - iorExt * cosThetaT) / (iorInt * cosTheta + iorExt * cosThetaT);
 
+		// Average reflectance
 		return (Rs * Rs + Rp * Rp) * 0.5f;
 	}
 	static Colour fresnelConductor(float cosTheta, Colour ior, Colour k)
@@ -95,12 +98,12 @@ public:
 		//* Add code here
 		float cosTheta = h.z;
 
-		// Only the upper hemisphere is physically meaningful
+		// Only the upper hemisphere
 		if (cosTheta <= 0.0f) return 0.0f;
 
 		float alpha2 = alpha * alpha;
 		float cos2 = cosTheta * cosTheta;
-		float denom = cos2 * (alpha2 - 1.0f) + 1.0f;   // (n·h)^2*(alpha^2-1)+1
+		float denom = cos2 * (alpha2 - 1.0f) + 1.0f;
 
 		return alpha2 / ((float)M_PI * denom * denom);
 	}
@@ -110,11 +113,9 @@ public:
 		float eta2 = eta * eta;
 		float k2 = kk * kk;
 
-		// t0 = eta^2 - k^2 - sin^2(theta)
+
 		float t0 = eta2 - k2 - sin2;
-		// a2b2 = sqrt( t0^2 + 4*eta^2*k^2 )  = (a^2 + b^2)
 		float a2b2 = sqrtf(std::max(0.0f, t0 * t0 + 4.0f * eta2 * k2));
-		// a = sqrt( (a^2 + b^2 + t0) / 2 )
 		float a = sqrtf(std::max(0.0f, 0.5f * (a2b2 + t0)));
 
 		// Rs
@@ -179,6 +180,7 @@ public:
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
+		//* Add correct evaluation code here
 		return albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
@@ -221,8 +223,10 @@ public:
 			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
 			return Vec3(0.0f, 0.0f, 0.0f);
 		}
+		// Reflect wo
 		Vec3 wiLocal(-woLocal.x, -woLocal.y, woLocal.z);
 		pdf = 1.0f;
+
 		float cosTheta = std::max(std::abs(wiLocal.z), EPSILON);
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / cosTheta;
 		return shadingData.frame.toWorld(wiLocal);
@@ -271,31 +275,31 @@ public:
 	{
 		//* Replace this with Conductor sampling code
 		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
-		if (woLocal.z <= 0.0f) { 
-			reflectedColour = Colour(0, 0, 0); 
-			pdf = 1.0f; 
-			return shadingData.frame.toWorld(Vec3(0, 0, 1)); 
+		if (woLocal.z <= 0.0f) {
+			reflectedColour = Colour(0, 0, 0);
+			pdf = 1.0f;
+			return shadingData.frame.toWorld(Vec3(0, 0, 1));
 		}
 
-		// Sample half-vector
+		// Sample microfacet normal
 		float phi = 2.0f * (float)M_PI * sampler->next();
-		float tanTheta2 = alpha * alpha * sampler->next() / std::max(1.0f - sampler->next(), 1e-6f);
+		float tanTheta2 = alpha * alpha * sampler->next() / std::max(1.0f - sampler->next(), 1e-6f);	// Avoid division by zero
 		float cosTheta = 1.0f / sqrtf(1.0f + tanTheta2);
 		float sinTheta = sqrtf(std::max(0.0f, 1.0f - cosTheta * cosTheta));
 		Vec3 h = Vec3(sinTheta * cosf(phi), sinTheta * sinf(phi), cosTheta);
 		float dot_wo_h = Dot(woLocal, h);
-		if (dot_wo_h <= 0.0f) { 
-			reflectedColour = Colour(0, 0, 0); 
-			pdf = 1.0f; 
-			return shadingData.frame.toWorld(Vec3(0, 0, 1)); 
+		if (dot_wo_h <= 0.0f) {
+			reflectedColour = Colour(0, 0, 0);
+			pdf = 1.0f;
+			return shadingData.frame.toWorld(Vec3(0, 0, 1));
 		}
 
-		// Reflect wo around h to get wi
+		// Microfacet reflection
 		Vec3 wiLocal = Vec3(2.0f * dot_wo_h * h.x - woLocal.x, 2.0f * dot_wo_h * h.y - woLocal.y, 2.0f * dot_wo_h * h.z - woLocal.z);
-		if (wiLocal.z <= 0.0f) { 
-			reflectedColour = Colour(0, 0, 0); 
-			pdf = 1.0f; 
-			return shadingData.frame.toWorld(Vec3(0, 0, 1)); 
+		if (wiLocal.z <= 0.0f) {
+			reflectedColour = Colour(0, 0, 0);
+			pdf = 1.0f;
+			return shadingData.frame.toWorld(Vec3(0, 0, 1));
 		}
 
 		// Evaluate BSDF
@@ -311,6 +315,7 @@ public:
 		Vec3 wiLocal = shadingData.frame.toLocal(wi);
 		if (woLocal.z <= 0.0f || wiLocal.z <= 0.0f) return Colour(0, 0, 0);
 
+		// Microfacet half-vector
 		Vec3  sum = Vec3(woLocal.x + wiLocal.x, woLocal.y + wiLocal.y, woLocal.z + wiLocal.z);
 		float len = sqrtf(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
 		if (len < 1e-6f) return Colour(0, 0, 0);
@@ -320,6 +325,7 @@ public:
 		float dot_wo_h = Dot(woLocal, h);
 		if (dot_wo_h <= 0.0f) return Colour(0, 0, 0);
 
+		// Cook-Torrance microfacet model
 		Colour F = ShadingHelper::fresnelConductor(dot_wo_h, eta, k);
 		float  D = ShadingHelper::Dggx(h, alpha);
 		float  G = ShadingHelper::Gggx(wiLocal, woLocal, alpha);
@@ -342,6 +348,7 @@ public:
 		if (h.z <= 0.0f) return 0.0f;
 		float d = Dot(woLocal, h);
 		if (d <= 0.0f) return 0.0f;
+
 		return ShadingHelper::Dggx(h, alpha) * h.z / (4.0f * d);
 	}
 	bool isPureSpecular()
@@ -402,6 +409,7 @@ public:
 		// Refraction
 		else
 		{
+			// Snell law
 			float sin2ThetaT = eta * eta * std::max(0.0f, 1.0f - cosThetaO * cosThetaO);
 
 			// Total internal reflection
@@ -413,12 +421,11 @@ public:
 			}
 			else
 			{
+				// Refraction direction
 				float cosThetaT = sqrtf(1.0f - sin2ThetaT);
 				if (entering) cosThetaT = -cosThetaT;
 
-				wiLocal = Vec3(-eta * woLocal.x,
-					-eta * woLocal.y,
-					cosThetaT);
+				wiLocal = Vec3(-eta * woLocal.x, -eta * woLocal.y, cosThetaT);
 				pdf = 1.0f - F;
 
 				reflectedColour = alb * ((1.0f - F) * eta * eta / std::max(fabsf(wiLocal.z), (float)EPSILON));
@@ -469,116 +476,206 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		//* Replace this with Dielectric sampling code
-		Vec3   woLocal = shadingData.frame.toLocal(shadingData.wo);
-		float  cos_o = fabsf(woLocal.z);
-		float  F = ShadingHelper::fresnelDielectric(cos_o, intIOR, extIOR);
-		Colour alb = albedo->sample(shadingData.tu, shadingData.tv);
+		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
+		if (fabsf(woLocal.z) < 1e-6f)
+		{
+			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
+			pdf = 0.0f;
+			return Vec3(0.0f, 0.0f, 0.0f);
+		}
 
+		bool entering = (woLocal.z > 0.0f);
+		float n_sign = entering ? 1.0f : -1.0f;
+
+		// Sample microfacet normal and reflect or refract wo
+		float u1 = sampler->next();
+		float u2 = sampler->next();
+		float phi = 2.0f * (float)M_PI * u1;
+
+		// GGX sampling
+		float tan2theta = alpha * alpha * u2 / std::max(1.0f - u2, 1e-6f);
+		float cos_thetam = 1.0f / sqrtf(1.0f + tan2theta);
+		float sin_thetam = sqrtf(std::max(0.0f, 1.0f - cos_thetam * cos_thetam));
+		Vec3 wm = Vec3(sin_thetam * cosf(phi), sin_thetam * sinf(phi), n_sign * cos_thetam);
+
+		float wo_dot_wm = Dot(woLocal, wm);
+		if (wo_dot_wm <= 0.0f)
+		{
+			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
+			pdf = 0.0f;
+			return Vec3(0.0f, 0.0f, 0.0f);
+		}
+
+		// Probability of reflection
+		float F = ShadingHelper::fresnelDielectric(wo_dot_wm, intIOR, extIOR);
+
+		Vec3 wiLocal;
 		if (sampler->next() < F)
 		{
-			// GGX specular reflection
-			if (woLocal.z <= 0.0f) {
-				reflectedColour = Colour(0, 0, 0); 
-				pdf = 1.0f; 
-				return shadingData.frame.toWorld(Vec3(0, 0, 1)); 
+			// Microfacet reflection
+			wiLocal = Vec3(2.0f * wo_dot_wm * wm.x - woLocal.x, 2.0f * wo_dot_wm * wm.y - woLocal.y, 2.0f * wo_dot_wm * wm.z - woLocal.z);
+			if (wiLocal.z * woLocal.z <= 0.0f)
+			{
+				reflectedColour = Colour(0.0f, 0.0f, 0.0f);
+				pdf = 0.0f;
+				return Vec3(0.0f, 0.0f, 0.0f);
 			}
-
-			// Sample half-vector
-			float phi = 2.0f * (float)M_PI * sampler->next();
-			float tanTheta2 = alpha * alpha * sampler->next() / std::max(1.0f - sampler->next(), 1e-6f);
-			float cosTheta = 1.0f / sqrtf(1.0f + tanTheta2);
-			float sinTheta = sqrtf(std::max(0.0f, 1.0f - cosTheta * cosTheta));
-			Vec3 h_l = Vec3(sinTheta * cosf(phi), sinTheta * sinf(phi), cosTheta);
-
-			float dot_wo_h = Dot(woLocal, h_l);
-			if (dot_wo_h <= 0.0f) {
-				reflectedColour = Colour(0, 0, 0);
-				pdf = 1.0f;
-				return shadingData.frame.toWorld(Vec3(0, 0, 1));
-			}
-
-			Vec3 wiLocal = Vec3(2.0f * dot_wo_h * h_l.x - woLocal.x,
-				2.0f * dot_wo_h * h_l.y - woLocal.y,
-				2.0f * dot_wo_h * h_l.z - woLocal.z);
-			if (wiLocal.z <= 0.0f) {
-				reflectedColour = Colour(0, 0, 0);
-				pdf = 1.0f;
-				return shadingData.frame.toWorld(Vec3(0, 0, 1));
-			}
-
-			float D = ShadingHelper::Dggx(h_l, alpha);
-			float G = ShadingHelper::Gggx(wiLocal, woLocal, alpha);
-			reflectedColour = alb * (F * D * G / (4.0f * woLocal.z * wiLocal.z));
-			pdf = std::max(F * D * h_l.z / (4.0f * dot_wo_h) + (1.0f - F) * wiLocal.z / (float)M_PI, 1e-6f);
-			return shadingData.frame.toWorld(wiLocal);
 		}
 		else
 		{
-			// Lambertian transmission
-			Vec3  wiLocal = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
-			wiLocal.z = -wiLocal.z;
-			float cos_i = fabsf(wiLocal.z);
-			reflectedColour = alb * ((1.0f - F) / std::max(cos_i, 1e-6f));
-			pdf = std::max((1.0f - F) * cos_i / (float)M_PI, 1e-8f);
-			return shadingData.frame.toWorld(wiLocal);
+			// Microfacet refraction
+			float eta_o = entering ? extIOR : intIOR;  // medium on wo side
+			float eta_t = entering ? intIOR : extIOR;  // medium on wi side
+			float eta_ratio = eta_o / eta_t;	// = sin(theta_t)/sin(theta_o)
+
+			// Snell law
+			float sin2_t = eta_ratio * eta_ratio * (1.0f - wo_dot_wm * wo_dot_wm);
+			if (sin2_t >= 1.0f)
+			{
+				// Total internal reflection
+				reflectedColour = Colour(0.0f, 0.0f, 0.0f);
+				pdf = 0.0f;
+				return Vec3(0.0f, 0.0f, 0.0f);
+			}
+			float cos_t = sqrtf(1.0f - sin2_t);
+			// Refraction direction
+			float k = eta_ratio * wo_dot_wm - cos_t;
+			wiLocal = Vec3(k * wm.x - eta_ratio * woLocal.x, k * wm.y - eta_ratio * woLocal.y, k * wm.z - eta_ratio * woLocal.z);
+
+			if (wiLocal.z * woLocal.z >= 0.0f)
+			{
+				// Refraction on the same side is invalid
+				reflectedColour = Colour(0.0f, 0.0f, 0.0f);
+				pdf = 0.0f;
+				return Vec3(0.0f, 0.0f, 0.0f);
+			}
 		}
+
+		Vec3 wiWorld = shadingData.frame.toWorld(wiLocal);
+		reflectedColour = evaluate(shadingData, wiWorld);
+		pdf = PDF(shadingData, wiWorld);
+		return wiWorld;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
 		//* Replace this with Dielectric evaluation code
-		Vec3   woLocal = shadingData.frame.toLocal(shadingData.wo);
-		Vec3   wiLocal = shadingData.frame.toLocal(wi);
-		Colour alb = albedo->sample(shadingData.tu, shadingData.tv);
-		float  F = ShadingHelper::fresnelDielectric(fabsf(woLocal.z), intIOR, extIOR);
+		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
+		Vec3 wiLocal = shadingData.frame.toLocal(wi);
+		if (fabsf(woLocal.z) < 1e-6f || fabsf(wiLocal.z) < 1e-6f) return Colour(0.0f, 0.0f, 0.0f);
 
-		if (wiLocal.z > 0.0f && woLocal.z > 0.0f)
+		Colour alb = albedo->sample(shadingData.tu, shadingData.tv);
+		bool entering = (woLocal.z > 0.0f);
+		bool sameSide = (woLocal.z * wiLocal.z > 0.0f);
+
+		if (sameSide)
 		{
-			Vec3  sum = Vec3(woLocal.x + wiLocal.x, woLocal.y + wiLocal.y, woLocal.z + wiLocal.z);
+			// Reflection if wi and wo are on the same side
+			Vec3 sum(woLocal.x + wiLocal.x, woLocal.y + wiLocal.y, woLocal.z + wiLocal.z);
 			float len = sqrtf(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
-			if (len < 1e-6f) return Colour(0, 0, 0);
-			Vec3 h = Vec3(sum.x / len, sum.y / len, sum.z / len);
-			if (h.z <= 0.0f || Dot(woLocal, h) <= 0.0f) return Colour(0, 0, 0);
-			float D = ShadingHelper::Dggx(h, alpha);
-			float G = ShadingHelper::Gggx(wiLocal, woLocal, alpha);
-			float d = 4.0f * woLocal.z * wiLocal.z;
-			if (d < 1e-8f) return Colour(0, 0, 0);
-			return alb * (F * D * G / d);
+			if (len < 1e-6f) return Colour(0.0f, 0.0f, 0.0f);
+			Vec3 wm(sum.x / len, sum.y / len, sum.z / len);
+			// Align wm with wo side
+			if (wm.z * woLocal.z < 0.0f) wm = Vec3(-wm.x, -wm.y, -wm.z);
+			float wo_dot_wm = Dot(woLocal, wm);
+			if (wo_dot_wm <= 0.0f) return Colour(0.0f, 0.0f, 0.0f);
+
+			float F = ShadingHelper::fresnelDielectric(wo_dot_wm, intIOR, extIOR);
+			Vec3 wmUp = (wm.z >= 0.0f) ? wm : Vec3(-wm.x, -wm.y, -wm.z);
+			Vec3 woUp(woLocal.x, woLocal.y, fabsf(woLocal.z));
+			Vec3 wiUp(wiLocal.x, wiLocal.y, fabsf(wiLocal.z));
+			float D = ShadingHelper::Dggx(wmUp, alpha);
+			float G = ShadingHelper::Gggx(wiUp, woUp, alpha);
+
+			// Cook-Torrance reflection
+			float denom = 4.0f * fabsf(woLocal.z) * fabsf(wiLocal.z);
+			if (denom < 1e-6f) return Colour(0.0f, 0.0f, 0.0f);
+			return alb * (F * D * G / denom);
 		}
-		else if (wiLocal.z < 0.0f)
+		else
 		{
-			return alb * ((1.0f - F) / (float)M_PI);
+			// Refraction if wi and wo are on different sides
+			float eta = entering ? (intIOR / extIOR) : (extIOR / intIOR);
+			Vec3 sum(eta * wiLocal.x + woLocal.x, eta * wiLocal.y + woLocal.y, eta * wiLocal.z + woLocal.z);
+			float len = sqrtf(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
+			if (len < 1e-6f) return Colour(0.0f, 0.0f, 0.0f);
+			Vec3 wm(sum.x / len, sum.y / len, sum.z / len);
+			// Align wm with wo's side
+			if (wm.z * woLocal.z < 0.0f) wm = Vec3(-wm.x, -wm.y, -wm.z);
+
+			float wo_dot_wm = Dot(woLocal, wm);
+			float wi_dot_wm = Dot(wiLocal, wm);
+			if (wo_dot_wm <= 0.0f) return Colour(0.0f, 0.0f, 0.0f);
+
+			float F = ShadingHelper::fresnelDielectric(wo_dot_wm, intIOR, extIOR);
+			Vec3 wmUp = (wm.z >= 0.0f) ? wm : Vec3(-wm.x, -wm.y, -wm.z);
+			Vec3 woUp(woLocal.x, woLocal.y, fabsf(woLocal.z));
+			Vec3 wiUp(wiLocal.x, wiLocal.y, fabsf(wiLocal.z));
+			float D = ShadingHelper::Dggx(wmUp, alpha);
+			float G = ShadingHelper::Gggx(wiUp, woUp, alpha);
+
+			// Cook-Torrance refraction
+			float denomTerm = wi_dot_wm + wo_dot_wm / eta;
+			float denomSq = denomTerm * denomTerm;
+			if (denomSq < 1e-6f) return Colour(0.0f, 0.0f, 0.0f);
+
+			float fr = (1.0f - F) * D * G * fabsf(wi_dot_wm) * fabsf(wo_dot_wm) / (denomSq * fabsf(wiLocal.z) * fabsf(woLocal.z));
+			return alb * fr;
 		}
-		return Colour(0, 0, 0);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
-		// Replace this with Dielectric PDF
-		Vec3  woLocal = shadingData.frame.toLocal(shadingData.wo);
-		Vec3  wiLocal = shadingData.frame.toLocal(wi);
-		float F = ShadingHelper::fresnelDielectric(fabsf(woLocal.z), intIOR, extIOR);
-		if (wiLocal.z > 0.0f && woLocal.z > 0.0f) {
-			// PDF is a combination of GGX specular reflection and Lambertian transmission
-			float P = 0.0f;
-			if (woLocal.z > 0.0f && wiLocal.z > 0.0f) {
-				// GGX specular reflection PDF
-				Vec3 sum = Vec3(woLocal.x + wiLocal.x, woLocal.y + wiLocal.y, woLocal.z + wiLocal.z);
-				float len = sqrtf(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
-				if (len >= 1e-6f) {
-					Vec3 h = Vec3(sum.x / len, sum.y / len, sum.z / len);
-					if (h.z > 0.0f) {
-						float d = Dot(woLocal, h);
-						if (d > 0.0f) {
-							P = ShadingHelper::Dggx(h, alpha) * h.z / (4.0f * d);
-						}
-					}
-				}
-			}
-			return std::max(F * P + (1.0f - F) * wiLocal.z / (float)M_PI, 1e-6f);
-		}
+		//* Replace this with Dielectric PDF
+		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
+		Vec3 wiLocal = shadingData.frame.toLocal(wi);
+		if (fabsf(woLocal.z) < 1e-6f || fabsf(wiLocal.z) < 1e-6f) return 0.0f;
 
-		else if (wiLocal.z < 0.0f)
-			return (1.0f - F) * fabsf(wiLocal.z) / (float)M_PI;
-		return 0.0f;
+		bool entering = (woLocal.z > 0.0f);
+		bool sameSide = (woLocal.z * wiLocal.z > 0.0f);
+
+		if (sameSide)
+		{
+			// Reflection branch
+			Vec3 sum(woLocal.x + wiLocal.x, woLocal.y + wiLocal.y, woLocal.z + wiLocal.z);
+			float len = sqrtf(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
+			if (len < 1e-6f) return 0.0f;
+			Vec3 wm(sum.x / len, sum.y / len, sum.z / len);
+			if (wm.z * woLocal.z < 0.0f) wm = Vec3(-wm.x, -wm.y, -wm.z);
+			float wo_dot_wm = Dot(woLocal, wm);
+			if (wo_dot_wm <= 0.0f) return 0.0f;
+
+			float F = ShadingHelper::fresnelDielectric(wo_dot_wm, intIOR, extIOR);
+			Vec3 wmUp = (wm.z >= 0.0f) ? wm : Vec3(-wm.x, -wm.y, -wm.z);
+			float D = ShadingHelper::Dggx(wmUp, alpha);
+			float pReflect = D * fabsf(wm.z) / (4.0f * wo_dot_wm);
+			return F * pReflect;
+		}
+		else
+		{
+			// Refraction branch
+			float eta = entering ? (intIOR / extIOR) : (extIOR / intIOR);
+			Vec3 sum(eta * wiLocal.x + woLocal.x,
+				eta * wiLocal.y + woLocal.y,
+				eta * wiLocal.z + woLocal.z);
+			float len = sqrtf(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
+			if (len < 1e-6f) return 0.0f;
+			Vec3 wm(sum.x / len, sum.y / len, sum.z / len);
+			if (wm.z * woLocal.z < 0.0f) wm = Vec3(-wm.x, -wm.y, -wm.z);
+
+			float wo_dot_wm = Dot(woLocal, wm);
+			float wi_dot_wm = Dot(wiLocal, wm);
+			if (wo_dot_wm <= 0.0f) return 0.0f;
+
+			float F = ShadingHelper::fresnelDielectric(wo_dot_wm, intIOR, extIOR);
+			Vec3 wmUp = (wm.z >= 0.0f) ? wm : Vec3(-wm.x, -wm.y, -wm.z);
+			float D = ShadingHelper::Dggx(wmUp, alpha);
+
+			float denomTerm = wi_dot_wm + wo_dot_wm / eta;
+			float denomSq = denomTerm * denomTerm;
+			if (denomSq < 1e-6f) return 0.0f;
+
+			float pRefract = D * fabsf(wm.z) * fabsf(wo_dot_wm) / denomSq;
+			return (1.0f - F) * pRefract;
+		}
 	}
 	bool isPureSpecular()
 	{
@@ -615,6 +712,7 @@ public:
 			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
 			return Vec3(0.0f, 0.0f, 0.0f);
 		}
+		// Sample wi in local space
 		Vec3 wiLocal = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
 		pdf = SamplingDistributions::cosineHemispherePDF(wiLocal);
 		Vec3 wiWorld = shadingData.frame.toWorld(wiLocal);
@@ -630,7 +728,7 @@ public:
 		// validate
 		if (cos_o <= 0.0f || cos_i <= 0.0f) return Colour(0.0f, 0.0f, 0.0f);
 
-		// Oren-Nayar A, B
+		// Oren-Nayar
 		float sigma2 = sigma * sigma;
 		float A = 1.0f - sigma2 / (2.0f * (sigma2 + 0.33f));
 		float B = 0.45f * sigma2 / (sigma2 + 0.09f);
@@ -638,16 +736,16 @@ public:
 		float sin_o = sqrtf(std::max(0.0f, 1.0f - cos_o * cos_o));
 		float sin_i = sqrtf(std::max(0.0f, 1.0f - cos_i * cos_i));
 
-		// cos(phi_i - phi_o)
+		// Compute cos(phi_i - phi_o)
 		float cosDeltaPhi = 0.0f;
-		if (sin_o > 1e-4f && sin_i > 1e-4f)
+		if (sin_o > 1e-6f && sin_i > 1e-6f)
 		{
 			float cos_phi_o = woLocal.x / sin_o, sin_phi_o = woLocal.y / sin_o;
 			float cos_phi_i = wiLocal.x / sin_i, sin_phi_i = wiLocal.y / sin_i;
 			cosDeltaPhi = cos_phi_i * cos_phi_o + sin_phi_i * sin_phi_o;
 		}
 
-		// alpha = max(theta_o, theta_i), beta = min(theta_o, theta_i)
+		// Compute alpha and beta
 		float theta_o = acosf(std::min(cos_o, 1.0f));
 		float theta_i = acosf(std::min(cos_i, 1.0f));
 		float sinAlpha = sinf(std::max(theta_o, theta_i));
@@ -696,7 +794,6 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		//* Replace this with Plastic sampling code
-		// cos θ_lobe = ξ₁ ^ (1 / (e + 1))
 		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
 		if (woLocal.z <= 0.0f)
 		{
@@ -716,7 +813,6 @@ public:
 			Vec3 wr(-woLocal.x, -woLocal.y, woLocal.z);
 
 			// Sample z-up lobe
-			// cos(theta_lobe) = xi1^(1/(e+1)),  phi = 2*pi*xi2
 			float u1 = sampler->next();
 			float u2 = sampler->next();
 			float cosThetaLobe = powf(std::max(u1, 1e-6f), 1.0f / (e + 1.0f));
@@ -738,19 +834,11 @@ public:
 				tangent = Vec3(1.0f, 0.0f, 0.0f);
 			}
 			// bitangent = wr x tangent
-			bitangent = Vec3(
-				wr.y * tangent.z - wr.z * tangent.y,
-				wr.z * tangent.x - wr.x * tangent.z,
-				wr.x * tangent.y - wr.y * tangent.x
-			);
+			bitangent = Vec3(wr.y * tangent.z - wr.z * tangent.y, wr.z * tangent.x - wr.x * tangent.z, wr.x * tangent.y - wr.y * tangent.x);
 
-			wiLocal = Vec3(
-				tangent.x * wLobe.x + bitangent.x * wLobe.y + wr.x * wLobe.z,
-				tangent.y * wLobe.x + bitangent.y * wLobe.y + wr.y * wLobe.z,
-				tangent.z * wLobe.x + bitangent.z * wLobe.y + wr.z * wLobe.z
-			);
+			wiLocal = Vec3(tangent.x * wLobe.x + bitangent.x * wLobe.y + wr.x * wLobe.z, tangent.y * wLobe.x + bitangent.y * wLobe.y + wr.y * wLobe.z, tangent.z * wLobe.x + bitangent.z * wLobe.y + wr.z * wLobe.z);
 
-			// Sample may fall below the horizon for grazing wo; drop it.
+			// Discard samples below the hemisphere
 			if (wiLocal.z <= 0.0f)
 			{
 				pdf = 0.0f;
@@ -772,7 +860,6 @@ public:
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
 		//* Replace this with Plastic evaluation code
-		// f_r = (1-F_o)(1-F_i)·ρ/π + F_o·((e+2)/2π)·max(0, ω_r·ω_i)^e
 		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
 		Vec3 wiLocal = shadingData.frame.toLocal(wi);
 		if (woLocal.z <= 0.0f || wiLocal.z <= 0.0f) return Colour(0.0f, 0.0f, 0.0f);
@@ -785,7 +872,7 @@ public:
 		// Lambert diffuse
 		Colour diffuse = rho * ((1.0f - Fo) * (1.0f - Fi) / (float)M_PI);
 
-		// Phong glossy lobe around the reflection direction wr.
+		// Phong glossy
 		float e = (2.0f / SQ(std::max(alpha, 0.001f))) - 2.0f;
 		Vec3 wr(-woLocal.x, -woLocal.y, woLocal.z);
 		float cosAlpha = std::max(0.0f, Dot(wr, wiLocal));
@@ -797,7 +884,6 @@ public:
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
 		//* Replace this with Plastic PDF
-		// F·((e+1)/2π)·max(0, ω_r·ω_i)^e + (1-F)·cos(θ)/π
 		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
 		Vec3 wiLocal = shadingData.frame.toLocal(wi);
 		if (woLocal.z <= 0.0f || wiLocal.z <= 0.0f) return 0.0f;
@@ -867,7 +953,7 @@ public:
 			float invCos = 1.0f / std::max(wiLocal.z, 1e-6f);
 			float c = Fo * invCos;  // F(wo)/cos(theta)
 			reflectedColour = Colour(c, c, c);
-			pdf = Fo;               // discrete branch probability for the delta
+			pdf = Fo;	// discrete branch probability for the delta
 			return wi;
 		}
 
@@ -915,11 +1001,10 @@ public:
 
 		float Fi = ShadingHelper::fresnelDielectric(cos_i, intIOR, extIOR);
 
-		//   d = t_h * (1/|wo'.n| + 1/|wi'.n|)
+		// Beer-Lambert absorption in the layer
 		float opticalDepth = thickness * (1.0f / cos_oRef + 1.0f / wiRefLocal.z);
 		Colour Tr(expf(-sigmaa.r * opticalDepth), expf(-sigmaa.g * opticalDepth), expf(-sigmaa.b * opticalDepth));
 
-		// f_layer = (1-Fo)(1-Fi) * T_r * f_base(wo', wi')
 		reflectedColour = baseVal * Tr * ((1.0f - Fo) * (1.0f - Fi));
 		pdf = (1.0f - Fo) * basePdf;
 		return wi;

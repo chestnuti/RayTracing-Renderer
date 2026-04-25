@@ -37,8 +37,8 @@ int main(int argc, char *argv[])
 	// Initialize default parameters
 	std::string sceneName = "MaterialsScene";
 	std::string filename = "GI.hdr";
-	unsigned int SPP = 8192;
-	bool enableDenoise = false;
+	unsigned int SPP = 32;
+	bool enableDenoise = true;
 
 	if (argc > 1)
 	{

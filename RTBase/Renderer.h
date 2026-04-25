@@ -201,7 +201,6 @@ public:
 	{
 		film->finalizeAOVs();
 	}
-#ifdef USE_OIDN
 	bool denoiseOIDN()
 	{
 		const unsigned int pixelCount = film->width * film->height;
@@ -257,13 +256,6 @@ public:
 		film->hasDenoisedBeauty = true;
 		return true;
 	}
-#else
-	bool denoiseOIDN()
-	{
-		std::cerr << "OIDN disabled. Rebuild with USE_OIDN and linked OpenImageDenoise." << std::endl;
-		return false;
-	}
-#endif
 	void render()
 	{
 		film->incrementSPP();
