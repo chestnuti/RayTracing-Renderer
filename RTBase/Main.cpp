@@ -37,8 +37,9 @@ int main(int argc, char *argv[])
 	// Initialize default parameters
 	std::string sceneName = "MaterialsScene";
 	std::string filename = "GI.hdr";
-	unsigned int SPP = 128;
-	bool enableDenoise = false;
+	unsigned int SPP = 16;
+	bool enableDenoise = true;
+	int renderMode = 0; // 0 = tile-based path tracing, 1 = light tracing, 2 = instant radiosity, 3 = albedo
 
 	if (argc > 1)
 	{
@@ -130,7 +131,7 @@ int main(int argc, char *argv[])
 		// Time how long a render call takes
 		timer.reset();
 		// Render
-		rt.render();
+		rt.render(renderMode);
 		float t = timer.dt();
 		// Write
 		std::cout << t << std::endl;

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Core.h"
 #include "Sampling.h"
@@ -14,14 +14,16 @@
 #include <string>
 #include <vector>
 #include <iostream>
-#if defined(USE_OIDN) && __has_include("OpenImageDenoise/oidn.hpp")
 #include "OpenImageDenoise/oidn.hpp"
-#else
-#define RTBASE_HAS_OIDN 0
-#endif
+
 
 struct Tile {
 	unsigned int x, y, w, h;
+};
+
+struct VPL {
+	ShadingData shadingData;
+	Colour Le;
 };
 
 class RayTracer
@@ -33,6 +35,8 @@ public:
 	MTRandom* samplers;
 	std::thread** threads;
 	int numProcs;
+
+	std::vector<VPL> vpls;	// List of VPLs for direct lighting
 
 	std::vector<Tile> tiles;	// List of tiles to render
 	std::atomic<int> tileIndex;	// Atomic index to keep track of the next tile to render
@@ -254,7 +258,7 @@ public:
 			{
 				return shadingData.bsdf->emit(shadingData, shadingData.wo);
 			}
-			return shadingData.bsdf->evaluate(shadingData, Vec3(0, 1, 0));
+          return shadingData.bsdf->evaluate(shadingData, shadingData.sNormal);
 		}
 		return scene->background->evaluate(r.dir);
 	}
@@ -348,85 +352,174 @@ public:
 		return true;
 	}
 
-	void render()
+	// modes: 0 = tile-based path tracing, 1 = light tracing, 2 = instant radiosity, 3 = albedo
+	void render(int mode)
 	{
 		film->incrementSPP();
-		// Tile-based rendering loop
-		unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
-		unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
-		tiles.clear();
-		for (unsigned int y = 0; y < film->height; y += tileY)
-		{
-			for (unsigned int x = 0; x < film->width; x += tileX)
-			{
-				Tile tile;
-				tile.x = x;
-				tile.y = y;
-				tile.w = std::min(tileX, film->width - x);
-				tile.h = std::min(tileY, film->height - y);
-				tiles.push_back(tile);
-			}
-		}
 
-		auto renderTile = [&](int threadId) {
-			while (true) {
-				int index = tileIndex.fetch_add(1);
-				if (index >= tiles.size()) {
-					break;
-				}
-				Tile tile = tiles[index];
-				for (unsigned int y = tile.y; y < tile.y + tile.h; y++)
+		if (mode == 0)
+		{
+			// Tile-based rendering loop
+			unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
+			unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
+			tiles.clear();
+			for (unsigned int y = 0; y < film->height; y += tileY)
+			{
+				for (unsigned int x = 0; x < film->width; x += tileX)
 				{
-					for (unsigned int x = tile.x; x < tile.x + tile.w; x++)
+					Tile tile;
+					tile.x = x;
+					tile.y = y;
+					tile.w = std::min(tileX, film->width - x);
+					tile.h = std::min(tileY, film->height - y);
+					tiles.push_back(tile);
+				}
+			}
+			auto renderTile = [&](int threadId) {
+				while (true) {
+					int index = tileIndex.fetch_add(1);
+					if (index >= tiles.size()) {
+						break;
+					}
+					Tile tile = tiles[index];
+					for (unsigned int y = tile.y; y < tile.y + tile.h; y++)
 					{
-						float px = x + 0.5f;
-						float py = y + 0.5f;
-						Ray ray = scene->camera.generateRay(px, py);
-						Colour startingThroughput(1, 1, 1);
-						Colour col = pathTrace(ray, startingThroughput, 0, &samplers[threadId]);
-						film->splat(px, py, col);
-						PrimaryAOV aov = computePrimaryAOV(ray);
-						film->splatAOV(x, y, aov);
-						unsigned char r = (unsigned char)(col.r * 255);
-						unsigned char g = (unsigned char)(col.g * 255);
-						unsigned char b = (unsigned char)(col.b * 255);
-						film->tonemap(x, y, r, g, b);
-						canvas->draw(x, y, r, g, b);
+						for (unsigned int x = tile.x; x < tile.x + tile.w; x++)
+						{
+							float px = x + 0.5f;
+							float py = y + 0.5f;
+							Ray ray = scene->camera.generateRay(px, py);
+							Colour startingThroughput(1, 1, 1);
+							Colour col = pathTrace(ray, startingThroughput, 0, &samplers[threadId]);
+							film->splat(px, py, col);
+							PrimaryAOV aov = computePrimaryAOV(ray);
+							film->splatAOV(x, y, aov);
+							unsigned char r = (unsigned char)(col.r * 255);
+							unsigned char g = (unsigned char)(col.g * 255);
+							unsigned char b = (unsigned char)(col.b * 255);
+							film->tonemap(x, y, r, g, b);
+							canvas->draw(x, y, r, g, b);
+						}
 					}
 				}
+			};
+			// Create threads to render tiles
+			tileIndex = 0;
+			for (int i = 0; i < numProcs; i++) {
+				threads[i] = new std::thread(renderTile, i);
 			}
-		};
-
-		// Create threads to render tiles
-		tileIndex = 0;
-		for (int i = 0; i < numProcs; i++) {
-			threads[i] = new std::thread(renderTile, i);
+			// Wait for all threads to finish
+			for (int i = 0; i < numProcs; i++) {
+				threads[i]->join();
+				delete threads[i];
+			}
 		}
 
-		// Wait for all threads to finish
-		for (int i = 0; i < numProcs; i++) {
-			threads[i]->join();
-			delete threads[i];
+		else if (mode == 1)
+		{
+			// Light tracing loop
+			const int N = film->width * film->height;
+			std::atomic<int> pathIndex(0);
+
+			auto worker = [&](int tid) {
+				while (true) {
+					int i = pathIndex.fetch_add(1);
+					if (i >= N) break;
+					lightTrace(&samplers[tid]);
+				}
+				};
+			for (int i = 0; i < numProcs; i++)
+				threads[i] = new std::thread(worker, i);
+			for (int i = 0; i < numProcs; i++) { threads[i]->join(); delete threads[i]; }
+
+			for (unsigned y = 0; y < film->height; y++)
+				for (unsigned x = 0; x < film->width; x++) {
+					unsigned char r, g, b;
+					film->tonemap(x, y, r, g, b);
+					canvas->draw(x, y, r, g, b);
+				}
 		}
 
+		else if (mode == 2)
+		{
+			// Instant Radiosity
+			unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
+			unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
+			tiles.clear();
+			for (unsigned int y = 0; y < film->height; y += tileY)
+			{
+				for (unsigned int x = 0; x < film->width; x += tileX)
+				{
+					Tile tile;
+					tile.x = x;
+					tile.y = y;
+					tile.w = std::min(tileX, film->width - x);
+					tile.h = std::min(tileY, film->height - y);
+					tiles.push_back(tile);
+				}
+			}
+			auto renderTile = [&](int threadId) {
+				while (true) {
+					int index = tileIndex.fetch_add(1);
+					if (index >= tiles.size()) {
+						break;
+					}
+					Tile tile = tiles[index];
+					for (unsigned int y = tile.y; y < tile.y + tile.h; y++)
+					{
+						for (unsigned int x = tile.x; x < tile.x + tile.w; x++)
+						{
+							float px = x + 0.5f;
+							float py = y + 0.5f;
+							Ray ray = scene->camera.generateRay(px, py);
+							Colour startingThroughput(1, 1, 1);
+							//Colour col = pathTrace(ray, startingThroughput, 0, &samplers[threadId]);
+							Colour col = instantRadiosity(ray, &samplers[threadId]);
+							film->splat(px, py, col);
+							PrimaryAOV aov = computePrimaryAOV(ray);
+							film->splatAOV(x, y, aov);
+							unsigned char r = (unsigned char)(col.r * 255);
+							unsigned char g = (unsigned char)(col.g * 255);
+							unsigned char b = (unsigned char)(col.b * 255);
+							film->tonemap(x, y, r, g, b);
+							canvas->draw(x, y, r, g, b);
+						}
+					}
+				}
+			};
+			// Create threads to render tiles
+			tileIndex = 0;
+			for (int i = 0; i < numProcs; i++) {
+				threads[i] = new std::thread(renderTile, i);
+			}
+			// Wait for all threads to finish
+			for (int i = 0; i < numProcs; i++) {
+				threads[i]->join();
+				delete threads[i];
+			}
+		}
 
-		//for (unsigned int y = 0; y < film->height; y++)
-		//{
-		//	for (unsigned int x = 0; x < film->width; x++)
-		//	{
-		//		float px = x + 0.5f;
-		//		float py = y + 0.5f;
-		//		Ray ray = scene->camera.generateRay(px, py);
-		//		//Colour col = viewNormals(ray);
-		//		Colour col = albedo(ray);
-		//		film->splat(px, py, col);
-		//		unsigned char r = (unsigned char)(col.r * 255);
-		//		unsigned char g = (unsigned char)(col.g * 255);
-		//		unsigned char b = (unsigned char)(col.b * 255);
-		//		film->tonemap(x, y, r, g, b);
-		//		canvas->draw(x, y, r, g, b);
-		//	}
-		//}
+		else if (mode == 3)
+		{
+			// Albedo
+			for (unsigned int y = 0; y < film->height; y++)
+			{
+				for (unsigned int x = 0; x < film->width; x++)
+				{
+					float px = x + 0.5f;
+					float py = y + 0.5f;
+					Ray ray = scene->camera.generateRay(px, py);
+					//Colour col = viewNormals(ray);
+					Colour col = albedo(ray);
+					//film->splat(px, py, col);
+					unsigned char r = (unsigned char)(col.r * 255);
+					unsigned char g = (unsigned char)(col.g * 255);
+					unsigned char b = (unsigned char)(col.b * 255);
+					//film->tonemap(x, y, r, g, b);
+					canvas->draw(x, y, r, g, b);
+				}
+			}
+		}
 	}
 
 	int getSPP()
@@ -442,5 +535,239 @@ public:
 	void savePNG(std::string filename)
 	{
 		stbi_write_png(filename.c_str(), canvas->getWidth(), canvas->getHeight(), 3, canvas->getBackBuffer(), canvas->getWidth() * 3);
+	}
+
+	// Light Tracing part
+
+	void connectToCamera(const Vec3& p, const Vec3& n, const Colour& col)
+	{
+		// Project to camera space
+		float xs, ys;
+		if (!scene->camera.projectOntoCamera(p, xs, ys)) return;
+
+		// Direction and distance
+		Vec3 toCam = scene->camera.origin - p;
+		float dist = toCam.length();
+		if (dist < EPSILON) return;
+		Vec3 wToCam = toCam / dist;
+
+		float cosAtSurface = Dot(n, wToCam);
+		float cosAtCamera = Dot(-scene->camera.viewDirection, wToCam);
+		if (cosAtSurface <= 0.0f || cosAtCamera <= 0.0f) return;   // backfacing or grazing angles
+
+		// Visible
+		if (!scene->visible(p, scene->camera.origin)) return;
+
+		// Compute the contribution and the camera importance
+		float cos2 = cosAtCamera * cosAtCamera;
+		float We = 1.0f / (scene->camera.Afilm * cos2 * cos2);
+
+		float G = cosAtSurface * cosAtCamera / (dist * dist);
+		Colour contribution = col * (G * We);
+
+		// Splat
+		{
+			std::lock_guard<std::mutex> lk(filmMutex);
+			film->splat(xs, ys, contribution);
+		}
+	}
+
+	void lightTrace(Sampler* sampler)
+	{
+		// Select light source
+		float pmf;
+		Light* light = scene->sampleLight(sampler, pmf);
+		if (!light) return;
+
+		// Sample position and direction
+		float pdfPos, pdfDir;
+		Vec3 p = light->samplePositionFromLight(sampler, pdfPos);
+		Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDir);
+
+		Colour Le = light->evaluate(-wi);   // outgoing from light
+		if (Le.Lum() <= 0.0f) return;
+
+		Colour throughput;
+		Vec3 rayOrigin;
+
+		// Connect to camera if is area light
+		Vec3 nLight = light->isArea() ? light->normal({}, wi) : -wi;
+		if (light->isArea()) {
+			Vec3 nLight = light->normal({}, wi);
+			float cosLight = Dot(nLight, wi);
+			if (cosLight <= 0.0f) return;
+
+			Colour col0 = Le * (cosLight / (pdfPos * pmf));
+			connectToCamera(p, nLight, Le / (pdfPos * pmf));
+
+			throughput = Le * (cosLight / (pdfDir * pdfPos * pmf));
+			rayOrigin = p;
+		}
+		else {
+			throughput = Le / (pdfDir * pdfPos * pmf);
+			rayOrigin = p;
+		}
+
+		Ray r;
+		r.init(rayOrigin + wi * EPSILON, wi);
+		lightTracePath(r, throughput, 1, sampler);
+	}
+
+	void lightTracePath(Ray& r, Colour throughput, int depth, Sampler* sampler)
+	{
+		constexpr int kMaxDepth = 8;
+		if (depth >= kMaxDepth) return;
+
+		IntersectionData it = scene->traverse(r);
+		ShadingData sd = scene->calculateShadingData(it, r);
+		if (sd.t >= FLT_MAX) return;
+		if (sd.bsdf->isLight()) return;	// End if hit light source
+
+		// Connect to camera if not pure specular
+		if (!sd.bsdf->isPureSpecular()) {
+			Vec3 wToCam = (scene->camera.origin - sd.x).normalize();
+			Colour bsdfVal = sd.bsdf->evaluate(sd, wToCam);
+			Colour col = throughput * bsdfVal;
+			connectToCamera(sd.x, sd.sNormal, col);
+		}
+
+		// Russian Roulette
+		float q = std::min(throughput.Lum(), 0.95f);
+		if (q <= EPSILON || sampler->next() > q) return;
+		throughput = throughput / q;
+
+		// Sample next direction
+		float pdf;
+		Colour bsdfVal;
+		Vec3 wi = sd.bsdf->sample(sd, sampler, bsdfVal, pdf);
+		if (pdf <= EPSILON || bsdfVal.Lum() <= 0.0f) return;
+
+		float cosTheta = std::abs(Dot(sd.sNormal, wi));
+		throughput = throughput * bsdfVal * (cosTheta / pdf);
+
+		Ray nextR;
+		nextR.init(sd.x + wi * EPSILON, wi);
+		lightTracePath(nextR, throughput, depth + 1, sampler);
+	}
+
+	// Instant Radiosity part
+
+	void traceVPLs(int N_VPL, Sampler* sampler)
+	{
+		vpls.clear();
+		vpls.reserve(N_VPL * 4);
+
+		for (int i = 0; i < N_VPL; i++) {
+			// Select light source and sample a ray
+			float pmf, pdfPos, pdfDir;
+			Light* light = scene->sampleLight(sampler, pmf);
+			Vec3 p = light->samplePositionFromLight(sampler, pdfPos);
+			Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDir);
+			Colour Le = light->evaluate(-wi);
+			if (Le.Lum() <= 0.0f) continue;
+
+			// Use light source as first VPL
+			if (light->isArea()) {
+				VPL v0;
+				v0.shadingData = ShadingData(p, light->normal({}, wi));
+				v0.shadingData.bsdf = nullptr;
+				v0.Le = Le / (pdfPos * pmf * (float)N_VPL);
+				vpls.push_back(v0);
+			}
+
+			// Generate a light path and store the first non-specular vertex as VPL
+			float cosLight = std::max(0.0f, Dot(light->normal({}, wi), wi));
+			Colour throughput = Le * (cosLight / (pdfDir * pdfPos * pmf * (float)N_VPL));
+
+			Ray r; r.init(p + wi * EPSILON, wi);
+			for (int depth = 0; depth < 8; depth++) {
+				IntersectionData it = scene->traverse(r);
+				ShadingData sd = scene->calculateShadingData(it, r);
+				if (sd.t >= FLT_MAX) break;
+				if (sd.bsdf->isLight()) break;
+
+				// Save VPL if it's not pure specular
+				if (!sd.bsdf->isPureSpecular()) {
+					VPL v; v.shadingData = sd; v.Le = throughput;
+					vpls.push_back(v);
+				}
+
+				// Russian Roulette
+				float q = std::min(throughput.Lum(), 0.95f);
+				if (sampler->next() > q) break;
+				throughput = throughput / q;
+
+				float pdf; Colour f;
+				Vec3 wd = sd.bsdf->sample(sd, sampler, f, pdf);
+				if (pdf <= EPSILON || f.Lum() <= 0.0f) break;
+				float cosT = std::abs(Dot(sd.sNormal, wd));
+				throughput = throughput * f * (cosT / pdf);
+				r.init(sd.x + wd * EPSILON, wd);
+			}
+		}
+	}
+
+	Colour instantRadiosity(Ray& r, Sampler* sampler)
+	{
+		IntersectionData it = scene->traverse(r);
+		ShadingData sd = scene->calculateShadingData(it, r);
+
+		if (sd.t >= FLT_MAX) return scene->background->evaluate(r.dir);
+		if (sd.bsdf->isLight()) return sd.bsdf->emit(sd, sd.wo);
+
+		// Mirror reflection pre-pass
+		Colour throughput(1, 1, 1);
+		int bounces = 0;
+		while (sd.bsdf->isPureSpecular() && bounces < 8) {
+			float pdf; Colour f;
+			Vec3 wd = sd.bsdf->sample(sd, sampler, f, pdf);
+			if (pdf <= EPSILON) return Colour(0, 0, 0);
+			float cosT = std::abs(Dot(sd.sNormal, wd));
+			throughput = throughput * f * (cosT / pdf);
+
+			Ray nr; nr.init(sd.x + wd * EPSILON, wd);
+			it = scene->traverse(nr);
+			sd = scene->calculateShadingData(it, nr);
+			if (sd.t >= FLT_MAX) return throughput * scene->background->evaluate(wd);
+			if (sd.bsdf->isLight()) return throughput * sd.bsdf->emit(sd, sd.wo);
+			bounces++;
+		}
+
+		// Direct lighting
+		Colour L = computeDirect(sd, sampler);
+
+		// Summation of contributions from VPLs
+		Colour indirect(0, 0, 0);
+		const float G_CLAMP = 100.0f;     // clamping factor to avoid extreme values from close VPLs, can be tuned based on scene scale
+		for (const VPL& vpl : vpls) {
+			Vec3 dir = vpl.shadingData.x - sd.x;
+			float d2 = dir.lengthSq();
+			if (d2 < EPSILON) continue;
+			float d = sqrtf(d2);
+			Vec3 wi = dir / d;
+
+			float cosShade = Dot(sd.sNormal, wi);
+			float cosVPL = Dot(vpl.shadingData.sNormal, -wi);
+			if (cosShade <= 0.0f || cosVPL <= 0.0f) continue;
+
+			float G = std::min((cosShade * cosVPL) / d2, G_CLAMP);
+
+			if (!scene->visible(sd.x, vpl.shadingData.x)) continue;
+
+			// BSDF at shaded point
+			Colour fShade = sd.bsdf->evaluate(sd, wi);
+
+			// BSDF at VPL
+			Colour fVPL(1, 1, 1);
+			if (vpl.shadingData.bsdf != nullptr) {
+				ShadingData sdVPL = vpl.shadingData;
+				sdVPL.wo = -wi;     // VPL outgoing towards the shaded point
+				fVPL = sdVPL.bsdf->evaluate(sdVPL, -wi);
+			}
+
+			indirect = indirect + fShade * fVPL * vpl.Le * G;
+		}
+
+		return throughput * (L + indirect);
 	}
 };

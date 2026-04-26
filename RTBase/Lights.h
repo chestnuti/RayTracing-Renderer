@@ -76,11 +76,12 @@ public:
 
 	Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf)
 	{
-		Vec3 wi = Vec3(0, 0, 1);
-		pdf = 1.0f;
+		//* Add code to sample a direction from the light
+		Vec3 wiLocal = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		pdf = SamplingDistributions::cosineHemispherePDF(wiLocal);
 		Frame frame;
 		frame.fromVector(triangle->gNormal());
-		return frame.toWorld(wi);
+		return frame.toWorld(wiLocal);
 	}
 };
 
@@ -129,6 +130,7 @@ public:
 
 	Vec3 samplePositionFromLight(Sampler* sampler, float& pdf)
 	{
+		// Samples a point on the bounding sphere of the scene. Feel free to improve this.
 		Vec3 p = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
 		p = p * use<SceneBounds>().sceneRadius;
 		p = p + use<SceneBounds>().sceneCentre;
@@ -138,6 +140,7 @@ public:
 
 	Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf)
 	{
+		//* Replace this tabulated sampling of environment maps
 		Vec3 wi = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
 		pdf = SamplingDistributions::uniformSpherePDF(wi);
 		return wi;
@@ -380,7 +383,8 @@ public:
 	{
 		Colour reflectedColour;
 		ShadingData shadingData;
-		return sample(shadingData, sampler, reflectedColour, pdf);
+		Vec3 wiToEnv = sample(shadingData, sampler, reflectedColour, pdf);
+		return -wiToEnv;
 	}
 
 private:
