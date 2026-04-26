@@ -14,8 +14,10 @@
 #include <string>
 #include <vector>
 #include <iostream>
-#ifdef USE_OIDN
+#if defined(USE_OIDN) && __has_include("OpenImageDenoise/oidn.hpp")
 #include "OpenImageDenoise/oidn.hpp"
+#else
+#define RTBASE_HAS_OIDN 0
 #endif
 
 struct Tile {
@@ -28,14 +30,14 @@ public:
 	Scene* scene;
 	GamesEngineeringBase::Window* canvas;
 	Film* film;
-	MTRandom *samplers;
-	std::thread **threads;
+	MTRandom* samplers;
+	std::thread** threads;
 	int numProcs;
 
-	std::vector<Tile> tiles;	// List of tiles to render
-	std::atomic<int> tileIndex;	// Atomic index to keep track of the next tile to render
-	std::mutex filmMutex;   // protect film->splat()
-	std::mutex canvasMutex; // protect canvas->draw()
+	std::vector<Tile> tiles;
+	std::atomic<int> tileIndex;
+	std::mutex filmMutex;
+	std::mutex canvasMutex;
 
 	void init(Scene* _scene, GamesEngineeringBase::Window* _canvas)
 	{
@@ -46,107 +48,180 @@ public:
 		SYSTEM_INFO sysInfo;
 		GetSystemInfo(&sysInfo);
 		numProcs = sysInfo.dwNumberOfProcessors;
-		threads = new std::thread*[numProcs];
+		threads = new std::thread * [numProcs];
 		samplers = new MTRandom[numProcs];
 		clear();
 	}
+
 	void clear()
 	{
 		film->clear();
 	}
+
 	Colour computeDirect(ShadingData shadingData, Sampler* sampler)
 	{
-		// Is surface is specular we cannot computing direct lighting
+		// LightTransport 1.pdf -> Path Tracing -> MIS when computing direct.
+		// Delta BSDFs skip explicit environment sampling and rely on path continuation only.
 		if (shadingData.bsdf->isPureSpecular() == true)
 		{
 			return Colour(0.0f, 0.0f, 0.0f);
 		}
-		// Compute direct lighting here
+
 		float pmf;
 		Light* light = scene->sampleLight(sampler, pmf);
-		if (!light) return Colour(0, 0, 0);
+		if (!light)
+		{
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
 
 		float lightPdf;
 		Colour emission;
 		Vec3 lightSamplePoint = light->sample(shadingData, sampler, emission, lightPdf);
 
-		// Distinguish area light
-		if (light->isArea()) {
+		if (light->isArea())
+		{
 			Vec3 wi = (lightSamplePoint - shadingData.x).normalize();
 			float dist = (lightSamplePoint - shadingData.x).length();
-			// Geometric term
 			float cosAtSurface = std::max(0.0f, Dot(shadingData.sNormal, wi));
 			float cosAtLight = std::max(0.0f, Dot(light->normal(shadingData, wi), -wi));
 			float G = cosAtSurface * cosAtLight / (dist * dist);
-			// Visibility
+
 			if (!scene->visible(shadingData.x, lightSamplePoint))
-				return Colour(0, 0, 0);
+			{
+				return Colour(0.0f, 0.0f, 0.0f);
+			}
+
 			Colour bsdf = shadingData.bsdf->evaluate(shadingData, wi);
 			return bsdf * emission * G / (lightPdf * pmf);
 		}
-		else {
-			// Directional/Environment light
-			Vec3 wi = lightSamplePoint;
-			float cosTheta = std::max(0.0f, Dot(shadingData.sNormal, wi));
-			// Visible if no intersection
-			Ray shadowRay; shadowRay.init(shadingData.x + wi * EPSILON, wi);
-			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX) == false)
-				return Colour(0, 0, 0);
-			Colour bsdf = shadingData.bsdf->evaluate(shadingData, wi);
-			return bsdf * emission * cosTheta / (lightPdf * pmf);
+
+		// LightTransport 1.pdf -> Path Tracing -> MIS when computing direct.
+		// Strategy 1: explicit environment sampling.
+		// Strategy 2: BSDF sampling.
+		// Both PDFs are compared in solid-angle space with the balance heuristic.
+		Colour directLighting(0.0f, 0.0f, 0.0f);
+
+		Vec3 wiEnv = lightSamplePoint;
+		const float envStrategyPdf = lightPdf * pmf;
+		if (envStrategyPdf > EPSILON && emission.Lum() > 0.0f)
+		{
+			Ray shadowRay;
+			shadowRay.init(shadingData.x + wiEnv * EPSILON, wiEnv);
+			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX))
+			{
+				Colour bsdfValue = shadingData.bsdf->evaluate(shadingData, wiEnv);
+				const float bsdfPdf = shadingData.bsdf->PDF(shadingData, wiEnv);
+				const float cosTheta = fabsf(Dot(shadingData.sNormal, wiEnv));
+				const float misWeight = envStrategyPdf / (envStrategyPdf + bsdfPdf + EPSILON);
+
+				if (bsdfValue.Lum() > 0.0f && cosTheta > 0.0f)
+				{
+					directLighting = directLighting + (emission * bsdfValue * (cosTheta * misWeight / envStrategyPdf));
+				}
+			}
 		}
+
+		float bsdfPdf = 0.0f;
+		Colour bsdfValue;
+		Vec3 wiBsdf = shadingData.bsdf->sample(shadingData, sampler, bsdfValue, bsdfPdf);
+		if (bsdfPdf > EPSILON && bsdfValue.Lum() > 0.0f)
+		{
+			Ray shadowRay;
+			shadowRay.init(shadingData.x + wiBsdf * EPSILON, wiBsdf);
+			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX))
+			{
+				Colour envRadiance = light->evaluate(wiBsdf);
+				if (envRadiance.Lum() > 0.0f)
+				{
+					const float envPdf = light->PDF(shadingData, wiBsdf) * pmf;
+					const float cosTheta = fabsf(Dot(shadingData.sNormal, wiBsdf));
+					const float misWeight = bsdfPdf / (envPdf + bsdfPdf + EPSILON);
+					directLighting = directLighting + (envRadiance * bsdfValue * (cosTheta * misWeight / bsdfPdf));
+				}
+			}
+		}
+
+		return directLighting;
 	}
+
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler)
 	{
-		//* Add pathtracer code here
-		// Limit the maximum depth
 		constexpr int kMaxDepth = 8;
-		if (depth >= kMaxDepth) return Colour(0, 0, 0);
-		// Compute ray-scene intersection
+		if (depth >= kMaxDepth)
+		{
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
+
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 
 		if (shadingData.t >= FLT_MAX)
-			return pathThroughput * scene->background->evaluate(r.dir);
-
-		// to light source directly
-		if (shadingData.bsdf->isLight())
 		{
-			// Only count emission for primary ray
-			if (depth == 0)
-				return pathThroughput * shadingData.bsdf->emit(shadingData, shadingData.wo);
-			else
-				return Colour(0, 0, 0);
+			return pathThroughput * scene->background->evaluate(r.dir);
 		}
 
-		Colour L(0, 0, 0);
+		if (shadingData.bsdf->isLight())
+		{
+			if (depth == 0)
+			{
+				return pathThroughput * shadingData.bsdf->emit(shadingData, shadingData.wo);
+			}
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
 
-		// NEE direct lighting
+		Colour L(0.0f, 0.0f, 0.0f);
 		L = L + pathThroughput * computeDirect(shadingData, sampler);
 
-		// Russian roulette termination
 		float q = std::min(pathThroughput.Lum(), 1.0f);
-		if (sampler->next() > q) return L;
+		if (q <= EPSILON || sampler->next() > q)
+		{
+			return L;
+		}
 		pathThroughput = pathThroughput / q;
 
-		// sample BSDF
-		float pdf;
+		float pdf = 0.0f;
 		Colour bsdfVal;
 		Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, pdf);
+		if (pdf <= EPSILON || bsdfVal.Lum() <= 0.0f)
+		{
+			return L;
+		}
+
 		float cosTheta = std::abs(Dot(shadingData.sNormal, wi));
 		pathThroughput = pathThroughput * bsdfVal * cosTheta / pdf;
 
-		// irradiance along the sampled direction
-		Ray nextRay; nextRay.init(shadingData.x + wi * EPSILON, wi);
+		Ray nextRay;
+		nextRay.init(shadingData.x + wi * EPSILON, wi);
+		IntersectionData nextIntersection = scene->traverse(nextRay);
+		if (nextIntersection.t >= FLT_MAX)
+		{
+			if (shadingData.bsdf->isPureSpecular() == false)
+			{
+				return L;
+			}
+
+			Colour envRadiance = scene->background->evaluate(wi);
+			return L + (pathThroughput * envRadiance);
+		}
+
+		ShadingData nextShadingData = scene->calculateShadingData(nextIntersection, nextRay);
+		if (nextShadingData.bsdf->isLight())
+		{
+			if (shadingData.bsdf->isPureSpecular() == false)
+			{
+				return L;
+			}
+			return L + (pathThroughput * nextShadingData.bsdf->emit(nextShadingData, nextShadingData.wo));
+		}
+
 		return L + pathTrace(nextRay, pathThroughput, depth + 1, sampler);
 	}
+
 	Colour direct(Ray& r, Sampler* sampler)
 	{
-		// Compute direct lighting for an image sampler here
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 
-		// Miss -> background
 		if (shadingData.t < FLT_MAX)
 		{
 			if (shadingData.bsdf->isLight())
@@ -157,6 +232,7 @@ public:
 		}
 		return scene->background->evaluate(r.dir);
 	}
+
 	Colour albedo(Ray& r)
 	{
 		IntersectionData intersection = scene->traverse(r);
@@ -171,6 +247,7 @@ public:
 		}
 		return scene->background->evaluate(r.dir);
 	}
+
 	Colour viewNormals(Ray& r)
 	{
 		IntersectionData intersection = scene->traverse(r);
@@ -181,6 +258,7 @@ public:
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
+
 	PrimaryAOV computePrimaryAOV(const Ray& r)
 	{
 		PrimaryAOV aov;
@@ -197,10 +275,12 @@ public:
 		aov.normal = Colour(shadingData.sNormal.x, shadingData.sNormal.y, shadingData.sNormal.z);
 		return aov;
 	}
+
 	void finalizeAOVs()
 	{
 		film->finalizeAOVs();
 	}
+
 	bool denoiseOIDN()
 	{
 		const unsigned int pixelCount = film->width * film->height;
@@ -256,11 +336,11 @@ public:
 		film->hasDenoisedBeauty = true;
 		return true;
 	}
+
 	void render()
 	{
 		film->incrementSPP();
 
-		// Tile-based rendering loop
 		unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
 		unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
 		tiles.clear();
@@ -277,12 +357,11 @@ public:
 			}
 		}
 
-		// Lambda function for rendering a tile
 		auto renderTile = [&](int threadId) {
 			while (true) {
 				int index = tileIndex.fetch_add(1);
 				if (index >= tiles.size()) {
-					break; // No more tiles to render
+					break;
 				}
 				Tile tile = tiles[index];
 				for (unsigned int y = tile.y; y < tile.y + tile.h; y++)
@@ -307,44 +386,27 @@ public:
 			}
 		};
 
-		// Create threads to render tiles
-		tileIndex = 0; // Initialize atomic tile index
+		tileIndex = 0;
 		for (int i = 0; i < numProcs; i++) {
 			threads[i] = new std::thread(renderTile, i);
 		}
 
-		// Wait for all threads to finish
 		for (int i = 0; i < numProcs; i++) {
 			threads[i]->join();
 			delete threads[i];
 		}
-
-		//for (unsigned int y = 0; y < film->height; y++)
-		//{
-		//	for (unsigned int x = 0; x < film->width; x++)
-		//	{
-		//		float px = x + 0.5f;
-		//		float py = y + 0.5f;
-		//		Ray ray = scene->camera.generateRay(px, py);
-		//		//Colour col = viewNormals(ray);
-		//		Colour col = albedo(ray);			
-		//		film->splat(px, py, col);
-		//		unsigned char r = (unsigned char)(col.r * 255);
-		//		unsigned char g = (unsigned char)(col.g * 255);
-		//		unsigned char b = (unsigned char)(col.b * 255);
-		//		film->tonemap(x, y, r, g, b);
-		//		canvas->draw(x, y, r, g, b);
-		//	}
-		//}
 	}
+
 	int getSPP()
 	{
 		return film->SPP;
 	}
+
 	void saveHDR(std::string filename)
 	{
 		film->save(filename);
 	}
+
 	void savePNG(std::string filename)
 	{
 		stbi_write_png(filename.c_str(), canvas->getWidth(), canvas->getHeight(), 3, canvas->getBackBuffer(), canvas->getWidth() * 3);
