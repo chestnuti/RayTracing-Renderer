@@ -280,7 +280,6 @@ public:
 	void tonemap(unsigned int x, unsigned int y, unsigned char& r, unsigned char& g, unsigned char& b, float exposure = 1.0f)
 	{
 		//* Add code here
-		// Defensive: if no samples yet, output black.
 		if (SPP <= 0)
 		{
 			r = g = b = 0;
@@ -289,7 +288,6 @@ public:
 
 		Colour col = film[y * width + x] / (float)SPP;
 
-		// Defensive: handle NaN/Inf in the film buffer (can happen after memory corruption).
 		if (!std::isfinite(col.r) || !std::isfinite(col.g) || !std::isfinite(col.b))
 		{
 			r = g = b = 0;
