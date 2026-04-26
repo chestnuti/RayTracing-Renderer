@@ -277,29 +277,31 @@ public:
 		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
 		if (woLocal.z <= 0.0f) {
 			reflectedColour = Colour(0, 0, 0);
-			pdf = 1.0f;
-			return shadingData.frame.toWorld(Vec3(0, 0, 1));
+			pdf = 0.0f;
+			return Vec3(0.0f, 0.0f, 0.0f);
 		}
 
 		// Sample microfacet normal
-		float phi = 2.0f * (float)M_PI * sampler->next();
-		float tanTheta2 = alpha * alpha * sampler->next() / std::max(1.0f - sampler->next(), 1e-6f);	// Avoid division by zero
+		float u = sampler->next();
+		float v = sampler->next();
+		float phi = 2.0f * (float)M_PI * v;
+		float tanTheta2 = alpha * alpha * u / std::max(1.0f - u, 1e-6f);
 		float cosTheta = 1.0f / sqrtf(1.0f + tanTheta2);
 		float sinTheta = sqrtf(std::max(0.0f, 1.0f - cosTheta * cosTheta));
 		Vec3 h = Vec3(sinTheta * cosf(phi), sinTheta * sinf(phi), cosTheta);
 		float dot_wo_h = Dot(woLocal, h);
 		if (dot_wo_h <= 0.0f) {
 			reflectedColour = Colour(0, 0, 0);
-			pdf = 1.0f;
-			return shadingData.frame.toWorld(Vec3(0, 0, 1));
+			pdf = 0.0f;
+			return Vec3(0.0f, 0.0f, 0.0f);
 		}
 
 		// Microfacet reflection
 		Vec3 wiLocal = Vec3(2.0f * dot_wo_h * h.x - woLocal.x, 2.0f * dot_wo_h * h.y - woLocal.y, 2.0f * dot_wo_h * h.z - woLocal.z);
 		if (wiLocal.z <= 0.0f) {
 			reflectedColour = Colour(0, 0, 0);
-			pdf = 1.0f;
-			return shadingData.frame.toWorld(Vec3(0, 0, 1));
+			pdf = 0.0f;
+			return Vec3(0.0f, 0.0f, 0.0f);
 		}
 
 		// Evaluate BSDF
@@ -1005,8 +1007,14 @@ public:
 		float opticalDepth = thickness * (1.0f / cos_oRef + 1.0f / wiRefLocal.z);
 		Colour Tr(expf(-sigmaa.r * opticalDepth), expf(-sigmaa.g * opticalDepth), expf(-sigmaa.b * opticalDepth));
 
-		reflectedColour = baseVal * Tr * ((1.0f - Fo) * (1.0f - Fi));
-		pdf = (1.0f - Fo) * basePdf;
+		float etaSq = eta_in * eta_in;
+		float invCosFactor = 1.0f / (cos_i * wiRefLocal.z);
+
+		reflectedColour = baseVal * Tr * (etaSq * (1.0f - Fo) * (1.0f - Fi) * invCosFactor);
+
+		// PDF Jacobian
+		float jacobian = etaSq * cos_i / wiRefLocal.z;
+		pdf = (1.0f - Fo) * basePdf * jacobian;
 		return wi;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
@@ -1040,7 +1048,10 @@ public:
 		float opticalDepth = thickness * (1.0f / cos_oRef + 1.0f / cos_iRef);
 		Colour Tr(expf(-sigmaa.r * opticalDepth), expf(-sigmaa.g * opticalDepth), expf(-sigmaa.b * opticalDepth));
 
-		return baseEval * Tr * ((1.0f - Fo) * (1.0f - Fi));
+		float etaSq = eta_in * eta_in;
+		float invCosFactor = 1.0f / (fabsf(wiLocal.z) * cos_iRef);
+
+		return baseEval * Tr * (etaSq * (1.0f - Fo) * (1.0f - Fi) * invCosFactor);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
@@ -1066,7 +1077,10 @@ public:
 		Vec3 wiRefWorld = shadingData.frame.toWorld(wiRef);
 
 		float basePdf = base->PDF(sdRef, wiRefWorld);
-		return (1.0f - Fo) * basePdf;
+
+		// Jacobian for refraction
+		float jacobian = (eta_in * eta_in) * fabsf(wiLocal.z) / cos_iRef;
+		return (1.0f - Fo) * basePdf * jacobian;
 	}
 	bool isPureSpecular()
 	{
