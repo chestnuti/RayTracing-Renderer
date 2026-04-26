@@ -34,10 +34,10 @@ public:
 	std::thread** threads;
 	int numProcs;
 
-	std::vector<Tile> tiles;
-	std::atomic<int> tileIndex;
-	std::mutex filmMutex;
-	std::mutex canvasMutex;
+	std::vector<Tile> tiles;	// List of tiles to render
+	std::atomic<int> tileIndex;	// Atomic index to keep track of the next tile to render
+	std::mutex filmMutex;	// protect film->splat()
+	std::mutex canvasMutex;	// protect canvas->draw()
 
 	void init(Scene* _scene, GamesEngineeringBase::Window* _canvas)
 	{
@@ -60,13 +60,13 @@ public:
 
 	Colour computeDirect(ShadingData shadingData, Sampler* sampler)
 	{
-		// LightTransport 1.pdf -> Path Tracing -> MIS when computing direct.
-		// Delta BSDFs skip explicit environment sampling and rely on path continuation only.
+		// Skip direct lighting
 		if (shadingData.bsdf->isPureSpecular() == true)
 		{
 			return Colour(0.0f, 0.0f, 0.0f);
 		}
 
+		// Sample a light source from the scene
 		float pmf;
 		Light* light = scene->sampleLight(sampler, pmf);
 		if (!light)
@@ -74,12 +74,14 @@ public:
 			return Colour(0.0f, 0.0f, 0.0f);
 		}
 
+		// Estimate direct lighting from the sampled light source
 		float lightPdf;
 		Colour emission;
 		Vec3 lightSamplePoint = light->sample(shadingData, sampler, emission, lightPdf);
 
 		if (light->isArea())
 		{
+			// Evaluate the direct-light contribution from the area light-sampled direction
 			Vec3 wi = (lightSamplePoint - shadingData.x).normalize();
 			float dist = (lightSamplePoint - shadingData.x).length();
 			float cosAtSurface = std::max(0.0f, Dot(shadingData.sNormal, wi));
@@ -95,20 +97,21 @@ public:
 			return bsdf * emission * G / (lightPdf * pmf);
 		}
 
-		// LightTransport 1.pdf -> Path Tracing -> MIS when computing direct.
-		// Strategy 1: explicit environment sampling.
-		// Strategy 2: BSDF sampling.
-		// Both PDFs are compared in solid-angle space with the balance heuristic.
+		// Accumulate direct lighting from the environment with MIS
 		Colour directLighting(0.0f, 0.0f, 0.0f);
 
+		// Treat non-area lights as environment lights and combine two estimators with MIS
 		Vec3 wiEnv = lightSamplePoint;
+		// Strategy PDF = select-this-light PMF * environment directional PDF
 		const float envStrategyPdf = lightPdf * pmf;
 		if (envStrategyPdf > EPSILON && emission.Lum() > 0.0f)
 		{
+			// Evaluate the direct-light contribution from the environment-sampled direction
 			Ray shadowRay;
 			shadowRay.init(shadingData.x + wiEnv * EPSILON, wiEnv);
 			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX))
 			{
+				// If visible, evaluate the BSDF and MIS balance weight for this strategy
 				Colour bsdfValue = shadingData.bsdf->evaluate(shadingData, wiEnv);
 				const float bsdfPdf = shadingData.bsdf->PDF(shadingData, wiEnv);
 				const float cosTheta = fabsf(Dot(shadingData.sNormal, wiEnv));
@@ -123,16 +126,20 @@ public:
 
 		float bsdfPdf = 0.0f;
 		Colour bsdfValue;
+		// Second MIS strategy: sample a direction from the BSDF
 		Vec3 wiBsdf = shadingData.bsdf->sample(shadingData, sampler, bsdfValue, bsdfPdf);
 		if (bsdfPdf > EPSILON && bsdfValue.Lum() > 0.0f)
 		{
+			// Evaluate the direct-light contribution from the BSDF-sampled direction
 			Ray shadowRay;
 			shadowRay.init(shadingData.x + wiBsdf * EPSILON, wiBsdf);
 			if (scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX))
 			{
+				// If visible, evaluate the environment radiance from that direction
 				Colour envRadiance = light->evaluate(wiBsdf);
 				if (envRadiance.Lum() > 0.0f)
 				{
+					// Compute the MIS balance weight against the environment-sampling strategy
 					const float envPdf = light->PDF(shadingData, wiBsdf) * pmf;
 					const float cosTheta = fabsf(Dot(shadingData.sNormal, wiBsdf));
 					const float misWeight = bsdfPdf / (envPdf + bsdfPdf + EPSILON);
@@ -172,6 +179,7 @@ public:
 		Colour L(0.0f, 0.0f, 0.0f);
 		L = L + pathThroughput * computeDirect(shadingData, sampler);
 
+		// End low-throughput paths with Russian roulette
 		float q = std::min(pathThroughput.Lum(), 1.0f);
 		if (q <= EPSILON || sampler->next() > q)
 		{
@@ -190,11 +198,13 @@ public:
 		float cosTheta = std::abs(Dot(shadingData.sNormal, wi));
 		pathThroughput = pathThroughput * bsdfVal * cosTheta / pdf;
 
+		// Continue the path with the sampled BSDF direction
 		Ray nextRay;
 		nextRay.init(shadingData.x + wi * EPSILON, wi);
 		IntersectionData nextIntersection = scene->traverse(nextRay);
 		if (nextIntersection.t >= FLT_MAX)
 		{
+			// Only specular chains allowed to pick up background radiance
 			if (shadingData.bsdf->isPureSpecular() == false)
 			{
 				return L;
@@ -207,6 +217,7 @@ public:
 		ShadingData nextShadingData = scene->calculateShadingData(nextIntersection, nextRay);
 		if (nextShadingData.bsdf->isLight())
 		{
+			// Only specular chains allowed to pick up emissive surfaces
 			if (shadingData.bsdf->isPureSpecular() == false)
 			{
 				return L;
@@ -340,7 +351,7 @@ public:
 	void render()
 	{
 		film->incrementSPP();
-
+		// Tile-based rendering loop
 		unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
 		unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
 		tiles.clear();
@@ -386,15 +397,36 @@ public:
 			}
 		};
 
+		// Create threads to render tiles
 		tileIndex = 0;
 		for (int i = 0; i < numProcs; i++) {
 			threads[i] = new std::thread(renderTile, i);
 		}
 
+		// Wait for all threads to finish
 		for (int i = 0; i < numProcs; i++) {
 			threads[i]->join();
 			delete threads[i];
 		}
+
+
+		//for (unsigned int y = 0; y < film->height; y++)
+		//{
+		//	for (unsigned int x = 0; x < film->width; x++)
+		//	{
+		//		float px = x + 0.5f;
+		//		float py = y + 0.5f;
+		//		Ray ray = scene->camera.generateRay(px, py);
+		//		//Colour col = viewNormals(ray);
+		//		Colour col = albedo(ray);
+		//		film->splat(px, py, col);
+		//		unsigned char r = (unsigned char)(col.r * 255);
+		//		unsigned char g = (unsigned char)(col.g * 255);
+		//		unsigned char b = (unsigned char)(col.b * 255);
+		//		film->tonemap(x, y, r, g, b);
+		//		canvas->draw(x, y, r, g, b);
+		//	}
+		//}
 	}
 
 	int getSPP()

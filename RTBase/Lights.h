@@ -148,12 +148,12 @@ class EnvironmentMap : public Light
 {
 public:
 	Texture* env = NULL;
-	std::vector<float> m_luminance;
-	std::vector<float> m_importance;
-	std::vector<float> m_marginalCDF;
-	std::vector<float> m_conditionalCDF;
-	float m_totalLuminance = 0.0f;
-	float m_totalImportance = 0.0f;
+	std::vector<float> luminance;
+	std::vector<float> importance;
+	std::vector<float> marginalCDF;
+	std::vector<float> conditionalCDF;
+	float totalLuminance = 0.0f;
+	float totalImportance = 0.0f;
 
 	EnvironmentMap(Texture* _env)
 	{
@@ -163,12 +163,12 @@ public:
 	void load(Texture* _env)
 	{
 		env = _env;
-		m_luminance.clear();
-		m_importance.clear();
-		m_marginalCDF.clear();
-		m_conditionalCDF.clear();
-		m_totalLuminance = 0.0f;
-		m_totalImportance = 0.0f;
+		luminance.clear();
+		importance.clear();
+		marginalCDF.clear();
+		conditionalCDF.clear();
+		totalLuminance = 0.0f;
+		totalImportance = 0.0f;
 
 		if (env == NULL || env->width <= 0 || env->height <= 0 || env->texels == NULL)
 		{
@@ -179,16 +179,14 @@ public:
 		const int height = env->height;
 		const int pixelCount = width * height;
 
-		m_luminance.resize(pixelCount, 0.0f);
-		m_importance.resize(pixelCount, 0.0f);
-		m_marginalCDF.resize(height, 0.0f);
-		m_conditionalCDF.resize(pixelCount, 0.0f);
+		luminance.resize(pixelCount, 0.0f);
+		importance.resize(pixelCount, 0.0f);
+		marginalCDF.resize(height, 0.0f);
+		conditionalCDF.resize(pixelCount, 0.0f);
 
 		std::vector<float> rowWeights(height, 0.0f);
 
-		// LightTransport 1.pdf -> Environment Lighting -> Sampling.
-		// Build a tabulated UV-domain PDF using luminance * sin(theta) so that the
-		// solid-angle density is proportional to radiance after Jacobian conversion.
+		// Build the tabulated importance distribution for the environment map
 		for (int v = 0; v < height; ++v)
 		{
 			const float vv = ((float)v + 0.5f) / (float)height;
@@ -199,38 +197,38 @@ public:
 			for (int u = 0; u < width; ++u)
 			{
 				const int idx = (v * width) + u;
-				const float luminance = env->texels[idx].Lum();
-				const float importance = luminance * sinTheta;
+				const float lum = env->texels[idx].Lum();
+				const float imp = lum * sinTheta;
 
-				m_luminance[idx] = luminance;
-				m_importance[idx] = importance;
-				m_totalLuminance += luminance;
-				rowWeight += importance;
+				luminance[idx] = lum;
+				importance[idx] = imp;
+				totalLuminance += lum;
+				rowWeight += imp;
 			}
 
 			rowWeights[v] = rowWeight;
-			m_totalImportance += rowWeight;
+			totalImportance += rowWeight;
 		}
 
-		if (m_totalImportance <= EPSILON)
+		if (totalImportance <= EPSILON)
 		{
 			for (int v = 0; v < height; ++v)
 			{
-				m_marginalCDF[v] = (float)(v + 1) / (float)height;
+				marginalCDF[v] = (float)(v + 1) / (float)height;
 				for (int u = 0; u < width; ++u)
 				{
-					m_conditionalCDF[(v * width) + u] = (float)(u + 1) / (float)width;
+					conditionalCDF[(v * width) + u] = (float)(u + 1) / (float)width;
 				}
 			}
-			m_marginalCDF[height - 1] = 1.0f;
+			marginalCDF[height - 1] = 1.0f;
 			return;
 		}
 
 		float marginalAccum = 0.0f;
 		for (int v = 0; v < height; ++v)
 		{
-			marginalAccum += rowWeights[v] / m_totalImportance;
-			m_marginalCDF[v] = marginalAccum;
+			marginalAccum += rowWeights[v] / totalImportance;
+			marginalCDF[v] = marginalAccum;
 
 			float conditionalAccum = 0.0f;
 			if (rowWeights[v] > EPSILON)
@@ -238,22 +236,22 @@ public:
 				for (int u = 0; u < width; ++u)
 				{
 					const int idx = (v * width) + u;
-					conditionalAccum += m_importance[idx] / rowWeights[v];
-					m_conditionalCDF[idx] = conditionalAccum;
+					conditionalAccum += importance[idx] / rowWeights[v];
+					conditionalCDF[idx] = conditionalAccum;
 				}
 			}
 			else
 			{
 				for (int u = 0; u < width; ++u)
 				{
-					m_conditionalCDF[(v * width) + u] = (float)(u + 1) / (float)width;
+					conditionalCDF[(v * width) + u] = (float)(u + 1) / (float)width;
 				}
 			}
 
-			m_conditionalCDF[(v * width) + (width - 1)] = 1.0f;
+			conditionalCDF[(v * width) + (width - 1)] = 1.0f;
 		}
 
-		m_marginalCDF[height - 1] = 1.0f;
+		marginalCDF[height - 1] = 1.0f;
 	}
 
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
@@ -265,18 +263,18 @@ public:
 			return Vec3(0.0f, 0.0f, 0.0f);
 		}
 
-		// LightTransport 1.pdf -> Environment Lighting -> Sampling.
-		// Sample marginal CDF in v/theta first, then conditional CDF in u/phi.
-		const float xi1 = std::min(sampler->next(), 1.0f - EPSILON);
-		const float xi2 = std::min(sampler->next(), 1.0f - EPSILON);
+		// Sample direction from the environment map
+		const float x1 = std::min(sampler->next(), 1.0f - EPSILON);
+		const float x2 = std::min(sampler->next(), 1.0f - EPSILON);
 
-		const int vIdx = sampleMarginalIndex(xi1);
-		const int uIdx = sampleConditionalIndex(vIdx, xi2);
+		const int vIdx = sampleMarginalIndex(x1);
+		const int uIdx = sampleConditionalIndex(vIdx, x2);
 
 		const float u = ((float)uIdx + 0.5f) / (float)env->width;
 		const float v = ((float)vIdx + 0.5f) / (float)env->height;
 		Vec3 wi = uvToDirection(u, v);
 
+		// Convert tabulated probability to a solid-angle PDF for path-space integration
 		pdf = PDF(shadingData, wi);
 		if (pdf <= EPSILON)
 		{
@@ -296,7 +294,6 @@ public:
 			return Colour(0.0f, 0.0f, 0.0f);
 		}
 
-		// LightTransport 1.pdf -> Environment Lighting -> Lookup.
 		float theta;
 		float phi;
 		float u;
@@ -311,13 +308,12 @@ public:
 
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
-		if (env == NULL || env->width <= 0 || env->height <= 0 || m_totalImportance <= EPSILON)
+		if (env == NULL || env->width <= 0 || env->height <= 0 || totalImportance <= EPSILON)
 		{
 			return 0.0f;
 		}
 
-		// LightTransport 1.pdf -> Environment Lighting -> Sampling.
-		// Jacobian conversion: p_omega = p(u,v) / (2*pi^2*sin(theta)).
+		// Return the solid-angle PDF
 		float theta;
 		float phi;
 		float u;
@@ -333,6 +329,7 @@ public:
 			return 0.0f;
 		}
 
+		// Convert uv to pixel indices
 		const int uIdx = std::min((int)(u * (float)env->width), env->width - 1);
 		const int vIdx = std::min((int)(v * (float)env->height), env->height - 1);
 		if (uIdx < 0 || uIdx >= env->width || vIdx < 0 || vIdx >= env->height)
@@ -340,9 +337,11 @@ public:
 			return 0.0f;
 		}
 
+		// Compute the PDF with respect to solid angle
 		const int idx = (vIdx * env->width) + uIdx;
-		const float pixelProbability = m_importance[idx] / m_totalImportance;
+		const float pixelProbability = importance[idx] / totalImportance;
 		const float pixelAreaUV = 1.0f / (float)(env->width * env->height);
+		// Apply the lat-long Jacobian to get PDF over solid angle
 		const float pdfUV = pixelProbability / pixelAreaUV;
 		return pdfUV / (2.0f * (float)M_PI * (float)M_PI * sinTheta);
 	}
@@ -364,9 +363,8 @@ public:
 			return 0.0f;
 		}
 
-		// LightTransport 1.pdf -> Environment Lighting.
-		// Approximate the environment integral on the sphere with the lat-long sin(theta) Jacobian.
-		return m_totalImportance * (2.0f * (float)M_PI * (float)M_PI) / (float)(env->width * env->height);
+		// Estimate the total integrated power of the environment map
+		return totalImportance * (2.0f * (float)M_PI * (float)M_PI) / (float)(env->width * env->height);
 	}
 
 	Vec3 samplePositionFromLight(Sampler* sampler, float& pdf)
@@ -388,9 +386,7 @@ public:
 private:
 	Vec3 worldToEnvLocal(const Vec3& worldDir) const
 	{
-		// LightTransport 1.pdf uses a z-up spherical parameterization, while this
-		// renderer's world/environment convention is y-up. Convert before applying
-		// the course formulas so the environment remains upright in world space.
+		// Convert to the environment local frame
 		return Vec3(worldDir.x, worldDir.z, worldDir.y);
 	}
 
@@ -401,6 +397,7 @@ private:
 
 	bool directionToUV(const Vec3& worldDir, float& theta, float& phi, float& u, float& v) const
 	{
+		// Convert world-space direction to latitude-longitude coordinates
 		const Vec3 envDirWorld = worldToEnvLocal(worldDir);
 		const float lenSq = (envDirWorld.x * envDirWorld.x) + (envDirWorld.y * envDirWorld.y) + (envDirWorld.z * envDirWorld.z);
 		if (lenSq <= (EPSILON * EPSILON))
@@ -435,27 +432,31 @@ private:
 
 	Vec3 uvToDirection(float u, float v) const
 	{
+		// Convert uv to spherical coordinates
 		const float phi = 2.0f * (float)M_PI * u;
 		const float theta = (float)M_PI * v;
 		const float sinTheta = sinf(theta);
 		const Vec3 envDir(sinTheta * cosf(phi), sinTheta * sinf(phi), cosf(theta));
+		// Convert to world space
 		return envLocalToWorld(envDir);
 	}
 
 	int sampleMarginalIndex(float xi) const
 	{
-		std::vector<float>::const_iterator it = std::lower_bound(m_marginalCDF.begin(), m_marginalCDF.end(), xi);
-		if (it == m_marginalCDF.end())
+		// Select theta row from the marginalCDF
+		std::vector<float>::const_iterator it = std::lower_bound(marginalCDF.begin(), marginalCDF.end(), xi);
+		if (it == marginalCDF.end())
 		{
-			return (int)m_marginalCDF.size() - 1;
+			return (int)marginalCDF.size() - 1;
 		}
-		return (int)(it - m_marginalCDF.begin());
+		return (int)(it - marginalCDF.begin());
 	}
 
 	int sampleConditionalIndex(int row, float xi) const
 	{
+		// Select phi column from the conditionalCDF row
 		const int width = env->width;
-		const float* rowStart = &m_conditionalCDF[row * width];
+		const float* rowStart = &conditionalCDF[row * width];
 		const float* rowEnd = rowStart + width;
 		const float* it = std::lower_bound(rowStart, rowEnd, xi);
 		if (it == rowEnd)
