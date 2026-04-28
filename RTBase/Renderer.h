@@ -35,6 +35,7 @@ public:
 	MTRandom* samplers;
 	std::thread** threads;
 	int numProcs;
+	bool enableMIS = true;
 
 	std::vector<VPL> vpls;	// List of VPLs for direct lighting
 
@@ -101,11 +102,37 @@ public:
 			return bsdf * emission * G / (lightPdf * pmf);
 		}
 
+        Vec3 wiEnv = lightSamplePoint;
+
+		if (!enableMIS)
+		{
+			// Environment-only
+			const float envPdf = lightPdf * pmf;
+			if (envPdf <= EPSILON || emission.Lum() <= 0.0f)
+			{
+				return Colour(0.0f, 0.0f, 0.0f);
+			}
+
+			Ray shadowRay;
+			shadowRay.init(shadingData.x + wiEnv * EPSILON, wiEnv);
+			if (!scene->bvh->traverseVisible(shadowRay, scene->triangles, FLT_MAX))
+			{
+				return Colour(0.0f, 0.0f, 0.0f);
+			}
+
+			Colour bsdfValue = shadingData.bsdf->evaluate(shadingData, wiEnv);
+			const float cosTheta = fabsf(Dot(shadingData.sNormal, wiEnv));
+			if (bsdfValue.Lum() <= 0.0f || cosTheta <= 0.0f)
+			{
+				return Colour(0.0f, 0.0f, 0.0f);
+			}
+
+			return emission * bsdfValue * (cosTheta / envPdf);
+		}
+
 		// Accumulate direct lighting from the environment with MIS
 		Colour directLighting(0.0f, 0.0f, 0.0f);
 
-		// Treat non-area lights as environment lights and combine two estimators with MIS
-		Vec3 wiEnv = lightSamplePoint;
 		// Strategy PDF = select-this-light PMF * environment directional PDF
 		const float envStrategyPdf = lightPdf * pmf;
 		if (envStrategyPdf > EPSILON && emission.Lum() > 0.0f)
@@ -298,30 +325,37 @@ public:
 
 	bool denoiseOIDN()
 	{
+		// Caculate the total number of pixels
 		const unsigned int pixelCount = film->width * film->height;
 		if (pixelCount == 0)
 		{
 			return false;
 		}
 
+		// Get the averaged beauty image from the film
 		std::vector<Colour> beauty = film->getAveragedBeauty();
 		std::vector<Colour> out(pixelCount, Colour(0, 0, 0));
 
+		// Create and commit an OIDN device and RT denoising filter
 		oidn::DeviceRef device = oidn::newDevice();
 		device.commit();
 		oidn::FilterRef filter = device.newFilter("RT");
 
+		// Calculate the total number of bytes for the image and create input/output buffers
 		const size_t imageBytes = static_cast<size_t>(pixelCount) * sizeof(Colour);
 		oidn::BufferRef colorBuf = device.newBuffer(imageBytes);
 		oidn::BufferRef outputBuf = device.newBuffer(imageBytes);
+		// Copy data into buffer
 		std::memcpy(colorBuf.getData(), beauty.data(), imageBytes);
 
+        // Bind
 		filter.setImage("color", colorBuf, oidn::Format::Float3, film->width, film->height);
 		filter.setImage("output", outputBuf, oidn::Format::Float3, film->width, film->height);
 
 		oidn::BufferRef albedoBuf;
 		if (film->aovAlbedo.size() == pixelCount)
 		{
+			// Bind albedo AOV
 			albedoBuf = device.newBuffer(imageBytes);
 			std::memcpy(albedoBuf.getData(), film->aovAlbedo.data(), imageBytes);
 			filter.setImage("albedo", albedoBuf, oidn::Format::Float3, film->width, film->height);
@@ -330,10 +364,12 @@ public:
 		oidn::BufferRef normalBuf;
 		if (film->aovNormal.size() == pixelCount)
 		{
+			// bind normal AOV
 			normalBuf = device.newBuffer(imageBytes);
 			std::memcpy(normalBuf.getData(), film->aovNormal.data(), imageBytes);
 			filter.setImage("normal", normalBuf, oidn::Format::Float3, film->width, film->height);
 		}
+
 		filter.set("hdr", true);
 		filter.commit();
 		filter.execute();
@@ -345,8 +381,10 @@ public:
 			return false;
 		}
 
+		// Copy result to the output
 		std::memcpy(out.data(), outputBuf.getData(), imageBytes);
 
+		// Update
 		film->denoisedBeauty = std::move(out);
 		film->hasDenoisedBeauty = true;
 		return true;
@@ -443,6 +481,8 @@ public:
 		else if (mode == 2)
 		{
 			// Instant Radiosity
+            constexpr int kVplCount = 16;
+			traceVPLs(kVplCount, &samplers[0]);
 			unsigned int tileX = std::max(1u, film->width / (unsigned int)numProcs);
 			unsigned int tileY = std::max(1u, film->height / (unsigned int)numProcs);
 			tiles.clear();
@@ -652,12 +692,12 @@ public:
 
 	// Instant Radiosity part
 
-	void traceVPLs(int N_VPL, Sampler* sampler)
+	void traceVPLs(int num, Sampler* sampler)
 	{
 		vpls.clear();
-		vpls.reserve(N_VPL * 4);
+		vpls.reserve(num * 4);
 
-		for (int i = 0; i < N_VPL; i++) {
+		for (int i = 0; i < num; i++) {
 			// Select light source and sample a ray
 			float pmf, pdfPos, pdfDir;
 			Light* light = scene->sampleLight(sampler, pmf);
@@ -671,13 +711,13 @@ public:
 				VPL v0;
 				v0.shadingData = ShadingData(p, light->normal({}, wi));
 				v0.shadingData.bsdf = nullptr;
-				v0.Le = Le / (pdfPos * pmf * (float)N_VPL);
+				v0.Le = Le / (pdfPos * pmf * (float)num);
 				vpls.push_back(v0);
 			}
 
 			// Generate a light path and store the first non-specular vertex as VPL
 			float cosLight = std::max(0.0f, Dot(light->normal({}, wi), wi));
-			Colour throughput = Le * (cosLight / (pdfDir * pdfPos * pmf * (float)N_VPL));
+			Colour throughput = Le * (cosLight / (pdfDir * pdfPos * pmf * (float)num));
 
 			Ray r; r.init(p + wi * EPSILON, wi);
 			for (int depth = 0; depth < 8; depth++) {

@@ -37,8 +37,10 @@ int main(int argc, char *argv[])
 	// Initialize default parameters
 	std::string sceneName = "MaterialsScene";
 	std::string filename = "GI.hdr";
-	unsigned int SPP = 16;
+	unsigned int SPP = 128;
 	bool enableDenoise = true;
+    bool enableMIS = true;
+	bool enableEnvmap = true;
 	int renderMode = 0; // 0 = tile-based path tracing, 1 = light tracing, 2 = instant radiosity, 3 = albedo
 
 	if (argc > 1)
@@ -81,13 +83,23 @@ int main(int argc, char *argv[])
 			{
 				enableDenoise = stoi(pair.second) != 0;
 			}
+           if (pair.first == "-MIS")
+			{
+				enableMIS = stoi(pair.second) != 0;
+			}
 		}
 	}
 	Scene* scene = loadScene(sceneName);
 	GamesEngineeringBase::Window canvas;
 	canvas.create((unsigned int)scene->camera.width, (unsigned int)scene->camera.height, "Tracer", false);
+	EnvironmentMap* envmap = dynamic_cast<EnvironmentMap*>(scene->background);
+	if (envmap)
+	{
+		envmap->enableEnvmap = enableEnvmap;
+	}
 	RayTracer rt;
 	rt.init(scene, &canvas);
+    rt.enableMIS = enableMIS;
 	bool running = true;
 	GamesEngineeringBase::Timer timer;
 	while (running)

@@ -277,7 +277,8 @@ public:
 		buildRecursive(inputTriangles, 0, inputTriangles.size());
 	}
 	// irratetion method for building the BVH
-	BVHNode* buildRecursive(std::vector<Triangle>& tris, int start, int end) {
+	BVHNode* buildRecursive(std::vector<Triangle>& tris, int start, int end) 
+	{
 		BVHNode* node = new BVHNode();
 
 		// cacluate bounds for this node
@@ -348,7 +349,7 @@ public:
 				continue;
 			}
 
-			// if the closest intersection found so far is closer than the intersection with the bounding box, skip
+			// skip if found closer intersection with the bounding box
 			if (t >= intersection.t)
 			{
 				continue;

@@ -157,12 +157,15 @@ public:
 	std::vector<float> conditionalCDF;
 	float totalLuminance = 0.0f;
 	float totalImportance = 0.0f;
+	bool enableEnvmap = true;
 
 	EnvironmentMap(Texture* _env)
 	{
-		load(_env);
+		if (enableEnvmap)
+			load(_env);
+		else
+			env = _env;
 	}
-
 	void load(Texture* _env)
 	{
 		env = _env;
@@ -189,7 +192,7 @@ public:
 
 		std::vector<float> rowWeights(height, 0.0f);
 
-		// Build the tabulated importance distribution for the environment map
+		// Build the tabulated importance distribution
 		for (int v = 0; v < height; ++v)
 		{
 			const float vv = ((float)v + 0.5f) / (float)height;
@@ -256,7 +259,6 @@ public:
 
 		marginalCDF[height - 1] = 1.0f;
 	}
-
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		if (env == NULL || env->width <= 0 || env->height <= 0 || sampler == NULL)
@@ -264,6 +266,14 @@ public:
 			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
 			pdf = 0.0f;
 			return Vec3(0.0f, 0.0f, 0.0f);
+		}
+
+		if (enableEnvmap == false)
+		{
+			Vec3 wi = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
+			pdf = SamplingDistributions::uniformSpherePDF(wi);
+			reflectedColour = evaluate(wi);
+			return wi;
 		}
 
 		// Sample direction from the environment map
@@ -289,12 +299,20 @@ public:
 		reflectedColour = evaluate(wi);
 		return wi;
 	}
-
 	Colour evaluate(const Vec3& wi)
 	{
 		if (env == NULL || env->width <= 0 || env->height <= 0)
 		{
 			return Colour(0.0f, 0.0f, 0.0f);
+		}
+
+		if (enableEnvmap == false)
+		{
+			float u = atan2f(wi.z, wi.x);
+			u = (u < 0.0f) ? u + (2.0f * M_PI) : u;
+			u = u / (2.0f * M_PI);
+			float v = acosf(wi.y) / M_PI;
+			return env->sample(u, v);
 		}
 
 		float theta;
@@ -308,12 +326,16 @@ public:
 
 		return env->sample(u, v);
 	}
-
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
 		if (env == NULL || env->width <= 0 || env->height <= 0 || totalImportance <= EPSILON)
 		{
 			return 0.0f;
+		}
+
+		if (enableEnvmap == false)
+		{
+			return SamplingDistributions::uniformSpherePDF(wi);
 		}
 
 		// Return the solid-angle PDF
@@ -348,28 +370,28 @@ public:
 		const float pdfUV = pixelProbability / pixelAreaUV;
 		return pdfUV / (2.0f * (float)M_PI * (float)M_PI * sinTheta);
 	}
-
 	bool isArea()
 	{
 		return false;
 	}
-
 	Vec3 normal(const ShadingData& shadingData, const Vec3& wi)
 	{
 		return -wi;
 	}
-
 	float totalIntegratedPower()
 	{
-		if (env == NULL || env->width <= 0 || env->height <= 0)
+		float total = 0;
+		for (int i = 0; i < env->height; i++)
 		{
-			return 0.0f;
+			float st = sinf(((float)i / (float)env->height) * M_PI);
+			for (int n = 0; n < env->width; n++)
+			{
+				total += (env->texels[(i * env->width) + n].Lum() * st);
+			}
 		}
-
-		// Estimate the total integrated power of the environment map
-		return totalImportance * (2.0f * (float)M_PI * (float)M_PI) / (float)(env->width * env->height);
+		total = total / (float)(env->width * env->height);
+		return total * 4.0f * M_PI;
 	}
-
 	Vec3 samplePositionFromLight(Sampler* sampler, float& pdf)
 	{
 		Vec3 p = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
@@ -378,7 +400,6 @@ public:
 		pdf = 1.0f / (4 * M_PI * SQ(use<SceneBounds>().sceneRadius));
 		return p;
 	}
-
 	Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf)
 	{
 		Colour reflectedColour;
@@ -387,7 +408,6 @@ public:
 		return -wiToEnv;
 	}
 
-private:
 	Vec3 worldToEnvLocal(const Vec3& worldDir) const
 	{
 		// Convert to the environment local frame
