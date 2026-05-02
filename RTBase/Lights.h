@@ -287,7 +287,7 @@ public:
 		const float v = ((float)vIdx + 0.5f) / (float)env->height;
 		Vec3 wi = uvToDirection(u, v);
 
-		// Convert tabulated probability to a solid-angle PDF for path-space integration
+		// Convert tabulated probability to a solid-angle PDF
 		pdf = PDF(shadingData, wi);
 		if (pdf <= EPSILON)
 		{

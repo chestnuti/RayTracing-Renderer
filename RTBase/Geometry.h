@@ -277,7 +277,7 @@ public:
 		buildRecursive(inputTriangles, 0, inputTriangles.size());
 	}
 	// irratetion method for building the BVH
-	BVHNode* buildRecursive(std::vector<Triangle>& tris, int start, int end) 
+	BVHNode* buildRecursive(std::vector<Triangle>& tris, int start, int end)
 	{
 		BVHNode* node = new BVHNode();
 
@@ -306,11 +306,7 @@ public:
 		}
 
 		// select axis with largest extent
-		Vec3 extent = {
-			centroidBounds.max.x - centroidBounds.min.x,
-			centroidBounds.max.y - centroidBounds.min.y,
-			centroidBounds.max.z - centroidBounds.min.z
-		};
+		Vec3 extent = {centroidBounds.max.x - centroidBounds.min.x, centroidBounds.max.y - centroidBounds.min.y, centroidBounds.max.z - centroidBounds.min.z};
 
 		int axis = 0;
 		if (extent.y > extent.x) axis = 1;
@@ -333,7 +329,6 @@ public:
 	void traverse(const Ray& ray, const std::vector<Triangle>& triangles, IntersectionData& intersection)
 	{
 		//* Add code here
-		// use stack-based traversal to avoid recursion
 		std::vector<BVHNode*> stack;
 		stack.push_back(this);
 
@@ -355,7 +350,7 @@ public:
 				continue;
 			}
 
-			// leaf node: check ray-triangle intersections
+			// leaf node
 			if (node->leaf())
 			{
 				for (int i = node->start; i < node->start + node->count; i++)
@@ -377,7 +372,7 @@ public:
 			}
 			else
 			{
-				// internal node: add child nodes to stack for traversal
+				// internal node
 				// traverse closer child first
 				if (node->l != NULL)
 					stack.push_back(node->l);
@@ -418,7 +413,7 @@ public:
 				continue;
 			}
 
-			// Leaf node: check ray-triangle intersections
+			// Leaf node
 			if (node->leaf())
 			{
 				for (int i = node->start; i < node->start + node->count; i++)
@@ -426,7 +421,7 @@ public:
 					float u, v, triT = maxT;
 					if (triangles[i].rayIntersect(ray, triT, u, v))
 					{
-						// If intersection is within maxT range, ray is blocked
+						// ray is blocked
 						if (triT < maxT)
 						{
 							return false;
@@ -436,7 +431,7 @@ public:
 			}
 			else
 			{
-				// Internal node: add child nodes to stack for traversal
+				// Internal node
 				if (node->l != NULL)
 					stack.push_back(node->l);
 				if (node->r != NULL)

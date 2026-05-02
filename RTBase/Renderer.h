@@ -65,7 +65,7 @@ public:
 
 	Colour computeDirect(ShadingData shadingData, Sampler* sampler)
 	{
-		// Skip direct lighting
+		// Skip if is purely specular surface
 		if (shadingData.bsdf->isPureSpecular() == true)
 		{
 			return Colour(0.0f, 0.0f, 0.0f);
@@ -79,30 +79,106 @@ public:
 			return Colour(0.0f, 0.0f, 0.0f);
 		}
 
-		// Estimate direct lighting from the sampled light source
+		// Sample light
 		float lightPdf;
 		Colour emission;
 		Vec3 lightSamplePoint = light->sample(shadingData, sampler, emission, lightPdf);
-
+		
+		// Area light
 		if (light->isArea())
 		{
-			// Evaluate the direct-light contribution from the area light-sampled direction
-			Vec3 wi = (lightSamplePoint - shadingData.x).normalize();
-			float dist = (lightSamplePoint - shadingData.x).length();
-			float cosAtSurface = std::max(0.0f, Dot(shadingData.sNormal, wi));
-			float cosAtLight = std::max(0.0f, Dot(light->normal(shadingData, wi), -wi));
-			float G = cosAtSurface * cosAtLight / (dist * dist);
+			Colour direct(0.0f, 0.0f, 0.0f);
 
-			if (!scene->visible(shadingData.x, lightSamplePoint))
+			// Light sampling L_d
 			{
-				return Colour(0.0f, 0.0f, 0.0f);
+				Vec3 toLight = lightSamplePoint - shadingData.x;
+				float dist2 = toLight.lengthSq();
+				float dist = sqrtf(dist2);
+				Vec3 wi = toLight / std::max(dist, EPSILON);
+
+				float cosAtSurface = Dot(shadingData.sNormal, wi);
+				float cosAtLight = Dot(light->normal(shadingData, wi), -wi);
+
+				if (cosAtSurface > 0.0f && cosAtLight > 0.0f &&
+					scene->visible(shadingData.x, lightSamplePoint))
+				{
+					// p_A(x_0)
+					const float pA_light = lightPdf * pmf;
+
+					if (pA_light > EPSILON)
+					{
+						// p_Ω(x_1 -> x_0)
+						const float bsdfPdfOmega = shadingData.bsdf->PDF(shadingData, wi);
+
+						// p_A = p_Ω * cosAtLight / dist^2
+						const float pA_bsdf = bsdfPdfOmega * cosAtLight / std::max(dist2, EPSILON);
+
+						if (enableMIS)
+						{
+							// w_d = p_A(x_0) / (p_A(x_0) + p_A(x_1->x_0))
+							const float wd = pA_light / (pA_light + pA_bsdf + EPSILON);
+
+							// f_r * L * G / p_A(x_0)
+							const float G = (cosAtSurface * cosAtLight) / std::max(dist2, EPSILON);
+							Colour bsdfVal = shadingData.bsdf->evaluate(shadingData, wi);
+							direct = direct + (bsdfVal * emission * G) * (wd / pA_light);
+						}
+						else
+						{
+							// No MIS
+							const float G = (cosAtSurface * cosAtLight) / std::max(dist2, EPSILON);
+							Colour bsdfVal = shadingData.bsdf->evaluate(shadingData, wi);
+							direct = direct + (bsdfVal * emission * G) / pA_light;
+						}
+					}
+				}
 			}
 
-			Colour bsdf = shadingData.bsdf->evaluate(shadingData, wi);
-			return bsdf * emission * G / (lightPdf * pmf);
+			//computing indirect and hits light L_ind
+			if (enableMIS)
+			{
+				float bsdfPdfOmega = 0.0f;
+				Colour bsdfVal;
+				Vec3 wiBsdf = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, bsdfPdfOmega);
+
+				if (bsdfPdfOmega > EPSILON && bsdfVal.Lum() > 0.0f)
+				{
+					float cosAtSurface = Dot(shadingData.sNormal, wiBsdf);
+					if (cosAtSurface > 0.0f)
+					{
+						Ray probeRay;
+						probeRay.init(shadingData.x + wiBsdf * EPSILON, wiBsdf);
+						IntersectionData hit = scene->traverse(probeRay);
+						if (hit.t < FLT_MAX)
+						{
+							ShadingData hitSD = scene->calculateShadingData(hit, probeRay);
+							float dist = hit.t;
+							float dist2 = dist * dist;
+							float cosAtLight = Dot(hitSD.sNormal, -wiBsdf);
+							if (cosAtLight > 0.0f)
+							{
+								// p_Ω(x_1 -> x_0)
+								const float pA_bsdf = bsdfPdfOmega * cosAtLight / std::max(dist2, EPSILON);
+								// pdf
+								const float pA_light = light->PDF(shadingData, wiBsdf) * pmf;
+
+								const float wind = pA_bsdf / (pA_light + pA_bsdf + EPSILON);
+
+								Colour Le = hitSD.bsdf->emit(hitSD, -wiBsdf);
+								// f_r * cos / p_Ω
+								direct = direct + (Le * bsdfVal * (cosAtSurface * wind / bsdfPdfOmega));
+							}
+
+						}
+					}
+				}
+			}
+
+			return direct;
 		}
 
-        Vec3 wiEnv = lightSamplePoint;
+		// Environment light
+		Vec3 wiEnv = lightSamplePoint;
 
 		if (!enableMIS)
 		{
@@ -155,9 +231,9 @@ public:
 			}
 		}
 
+		// Hit the environment light
 		float bsdfPdf = 0.0f;
 		Colour bsdfValue;
-		// Second MIS strategy: sample a direction from the BSDF
 		Vec3 wiBsdf = shadingData.bsdf->sample(shadingData, sampler, bsdfValue, bsdfPdf);
 		if (bsdfPdf > EPSILON && bsdfValue.Lum() > 0.0f)
 		{
@@ -465,10 +541,13 @@ public:
 					if (i >= N) break;
 					lightTrace(&samplers[tid]);
 				}
-				};
+			};
 			for (int i = 0; i < numProcs; i++)
 				threads[i] = new std::thread(worker, i);
-			for (int i = 0; i < numProcs; i++) { threads[i]->join(); delete threads[i]; }
+			for (int i = 0; i < numProcs; i++) {
+				threads[i]->join();
+				delete threads[i];
+			}
 
 			for (unsigned y = 0; y < film->height; y++)
 				for (unsigned x = 0; x < film->width; x++) {
@@ -778,7 +857,7 @@ public:
 
 		// Summation of contributions from VPLs
 		Colour indirect(0, 0, 0);
-		const float G_CLAMP = 100.0f;     // clamping factor to avoid extreme values from close VPLs, can be tuned based on scene scale
+		const float G_CLAMP = 100.0f;     // clamping factor to avoid extreme values
 		for (const VPL& vpl : vpls) {
 			Vec3 dir = vpl.shadingData.x - sd.x;
 			float d2 = dir.lengthSq();
