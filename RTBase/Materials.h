@@ -523,19 +523,12 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		//* Replace this with OrenNayar sampling code
-		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
-		if (woLocal.z <= 0.0f)
-		{
-			pdf = 0.0f;
-			reflectedColour = Colour(0.0f, 0.0f, 0.0f);
-			return Vec3(0.0f, 0.0f, 0.0f);
-		}
-		// Sample wi in local space
-		Vec3 wiLocal = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
-		pdf = SamplingDistributions::cosineHemispherePDF(wiLocal);
-		Vec3 wiWorld = shadingData.frame.toWorld(wiLocal);
-		reflectedColour = evaluate(shadingData, wiWorld);
-		return wiWorld;
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		pdf = SamplingDistributions::cosineHemispherePDF(wi);
+
+		reflectedColour = evaluate(shadingData, wi);
+		wi = shadingData.frame.toWorld(wi);
+		return wi;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
@@ -575,10 +568,9 @@ public:
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
 		//* Replace this with OrenNayar PDF
-		Vec3 woLocal = shadingData.frame.toLocal(shadingData.wo);
-		Vec3 wiLocal = shadingData.frame.toLocal(wi);
-		if (woLocal.z <= 0.0f || wiLocal.z <= 0.0f) return 0.0f;
-		return wiLocal.z / (float)M_PI;
+		const Vec3 wiLocal = shadingData.frame.toLocal(wi);
+		if (wiLocal.z <= 0.0f) return 0.0f;
+		return SamplingDistributions::cosineHemispherePDF(wiLocal);
 	}
 	bool isPureSpecular()
 	{
